@@ -26,7 +26,7 @@
 
 Name: sssd
 Version: 1.13.3
-Release: 57%{?dist}
+Release: 58%{?dist}
 Group: Applications/System
 Summary: System Security Services Daemon
 License: GPLv3+
@@ -165,6 +165,7 @@ Patch0127: 0127-LDAP-Adding-SIGCHLD-callback.patch
 Patch0128: 0128-GPO-Skip-GPOs-without-gPCFunctionalityVersion.patch
 Patch0129: 0129-gpo-Improve-debug-messages.patch
 Patch0130: 0130-HBAC-Do-not-rely-on-originalMemberOf-use-the-sysdb-m.patch
+Patch0131: 0131-NSS-Use-nss_ctx-as-memory-context-in-set_netgr_lifet.patch
 
 ### Dependencies ###
 Requires: sssd-common = %{version}-%{release}
@@ -942,6 +943,10 @@ fi
 %postun -n libsss_idmap -p /sbin/ldconfig
 
 %changelog
+* Fri Jan 12 2018 Jakub Hrozek <jhrozek@redhat.com> - 1.13.3-58
+- Resolves: rhbz#1534618 - ABRT crash - /usr/libexec/sssd/sssd_nss
+                           [rhel-6.9.z]
+
 * Thu Jul 27 2017 Jakub Hrozek <jhrozek@redhat.com> - 1.13.3-57
 - Resolves: rhbz#1473005 - The originalMemberOf attribute disappears from
                            the cache, causing intermittent HBAC issues

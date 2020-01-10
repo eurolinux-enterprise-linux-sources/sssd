@@ -1,0 +1,40 @@
+From 5eceddb1563de303d1f1447ac230a77d9ee9cf51 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Fabiano=20Fid=C3=AAncio?= <fidencio@redhat.com>
+Date: Mon, 6 Nov 2017 17:13:14 +0100
+Subject: [PATCH 131/131] NSS: Use nss_ctx as memory context in
+ set_netgr_lifetime()
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+We've noticed some crashes that happened because gctx is already freed,
+but the timeout handler is still called. In order to avoid that, let's
+remove the timeout handler when nss_ctx is freed at other places.
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3523
+
+Signed-off-by: Fabiano Fidêncio <fidencio@redhat.com>
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit e2ee9ff3bcd321c5ab9746a83ce81aaaf71f5355)
+(cherry picked from commit 6c39572b99fc43979931d2f12f15343cdbfcf6a0)
+---
+ src/responder/nss/nsssrv_netgroup.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/responder/nss/nsssrv_netgroup.c b/src/responder/nss/nsssrv_netgroup.c
+index ee99b228e4bbf897b3f4377a8d09fadb07e71680..9426d1a2786cc0675598c28d0f47b1c60627e644 100644
+--- a/src/responder/nss/nsssrv_netgroup.c
++++ b/src/responder/nss/nsssrv_netgroup.c
+@@ -419,7 +419,7 @@ static void set_netgr_lifetime(uint32_t lifetime,
+ 
+     tv = tevent_timeval_current_ofs(lifetime, 0);
+     te = tevent_add_timer(step_ctx->nctx->rctx->ev,
+-                          step_ctx->nctx->gctx, tv,
++                          step_ctx->nctx, tv,
+                           setnetgrent_result_timeout,
+                           netgr);
+     if (!te) {
+-- 
+2.14.3
+
