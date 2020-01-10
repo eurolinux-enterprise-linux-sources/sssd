@@ -26,7 +26,7 @@
 
 Name: sssd
 Version: 1.13.3
-Release: 60%{?dist}
+Release: 60%{?dist}.2
 Group: Applications/System
 Summary: System Security Services Daemon
 License: GPLv3+
@@ -205,6 +205,8 @@ Patch0167: 0167-Fix-iterating-to-next-domain-for-initgroup-lookups.patch
 Patch0168: 0168-IPA-Remove-sshPublicKey-attribute-when-it-s-not-set.patch
 Patch0169: 0169-SYSDB_VIEWS-Remove-sshPublicKey-attribute-when-it-s-.patch
 Patch0170: 0170-ipa-remove-SYSDB_USER_CERT-from-sub-domain-users.patch
+Patch0171: 0171-NSS-remove-timed-event-if-related-object-is-removed.patch
+Patch0172: 0172-PAM-Do-not-act-on-ldb_message-in-case-of-a-failure.patch
 
 # This patch is downstream only and should be removed when the proper solution
 # is backported to sssd-1-13
@@ -986,6 +988,12 @@ fi
 %postun -n libsss_idmap -p /sbin/ldconfig
 
 %changelog
+* Wed Nov 07 2018 Michal Židek <mzidek@redhat.com> - 1.13.3-60.2
+- Resolves: rhbz#1636172 - crash in ldb_msg_find_ldb_val
+
+* Wed Nov 07 2018 Michal Židek <mzidek@redhat.com> - 1.13.3-60.1
+- Resolves: rhbz#1576852 - ABRT crash - /usr/libexec/sssd/sssd_nss
+
 * Tue Feb 27 2018 Fabiano Fidêncio <fidencio@redhat.com> - 1.13.3-60
 - Related: rhbz#1442703 - Smart Cards: Certificate in the ID View
 - Related: rhbz# 1401546 - Please back-port fast failover from sssd 1.14 on RHEL 7 into sssd 1.13 on RHEL 6

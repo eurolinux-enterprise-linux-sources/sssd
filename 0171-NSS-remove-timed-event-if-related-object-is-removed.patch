@@ -1,0 +1,41 @@
+From 377b622fe278b9a2f1770f14cd48aba0da52bea7 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 9 May 2018 14:55:22 +0200
+Subject: [PATCH] NSS: remove timed event if related object is removed
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+setnetgrent_result_timeout() is called as a timed event to free the
+netgr data is the cache lifetime is exceeded. If the data is freed
+earlier the timed event should be removed as well to avoid a double
+free issue.
+
+Since talloc is used here the most easy way to achieve this is to
+allocate the timed event on the netgr object itself.
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3737
+
+Reviewed-by: Fabiano Fidêncio <fidencio@redhat.com>
+(cherry picked from commit 83dfa4ded19c73db50b7d3b909109139c752ae28)
+---
+ src/responder/nss/nsssrv_netgroup.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/responder/nss/nsssrv_netgroup.c b/src/responder/nss/nsssrv_netgroup.c
+index 9426d1a27..29fc3665f 100644
+--- a/src/responder/nss/nsssrv_netgroup.c
++++ b/src/responder/nss/nsssrv_netgroup.c
+@@ -419,7 +419,7 @@ static void set_netgr_lifetime(uint32_t lifetime,
+ 
+     tv = tevent_timeval_current_ofs(lifetime, 0);
+     te = tevent_add_timer(step_ctx->nctx->rctx->ev,
+-                          step_ctx->nctx, tv,
++                          netgr, tv,
+                           setnetgrent_result_timeout,
+                           netgr);
+     if (!te) {
+-- 
+2.17.1
+

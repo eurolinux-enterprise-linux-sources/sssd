@@ -1,0 +1,60 @@
+From 5cda8428d23266aaaf4d7cddba50311202365c16 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Wed, 3 Aug 2016 17:43:14 +0200
+Subject: [PATCH 0001/1633] PAM: Do not act on ldb_message in case of a failure
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+---
+ src/responder/pam/pamsrv_cmd.c | 33 ++++++++++++++++++---------------
+ 1 file changed, 18 insertions(+), 15 deletions(-)
+
+diff --git a/src/responder/pam/pamsrv_cmd.c b/src/responder/pam/pamsrv_cmd.c
+index 66564f5..be54fbf 100644
+--- a/src/responder/pam/pamsrv_cmd.c
++++ b/src/responder/pam/pamsrv_cmd.c
+@@ -1534,21 +1534,24 @@ static int pam_check_user_search(struct pam_auth_req *preq)
+ 
+         if (preq->pd->name_is_upn) {
+             ret = sysdb_search_user_by_upn(preq, dom, name, user_attrs, &msg);
+-
+-            /* Since sysdb_search_user_by_upn() searches the whole cache we
+-             * have to set the domain so that it matches the result. */
+-            sysdb_name = ldb_msg_find_attr_as_string(msg, SYSDB_NAME, NULL);
+-            if (sysdb_name == NULL) {
+-                DEBUG(SSSDBG_CRIT_FAILURE, "Cached entry has no name.\n");
+-                return EINVAL;
+-            }
+-            preq->domain = find_domain_by_object_name(get_domains_head(dom),
+-                                                      sysdb_name);
+-            if (preq->domain == NULL) {
+-                DEBUG(SSSDBG_CRIT_FAILURE,
+-                      "Cannot find matching domain for [%s].\n",
+-                      sysdb_name);
+-                return EINVAL;
++            if (ret == EOK) {
++                /* Since sysdb_search_user_by_upn() searches the whole cache we
++                * have to set the domain so that it matches the result. */
++                sysdb_name = ldb_msg_find_attr_as_string(msg,
++                                                         SYSDB_NAME, NULL);
++                if (sysdb_name == NULL) {
++                    DEBUG(SSSDBG_CRIT_FAILURE, "Cached entry has no name.\n");
++                    return EINVAL;
++                }
++                preq->domain = find_domain_by_object_name(
++                                                        get_domains_head(dom),
++                                                        sysdb_name);
++                if (preq->domain == NULL) {
++                    DEBUG(SSSDBG_CRIT_FAILURE,
++                          "Cannot find matching domain for [%s].\n",
++                          sysdb_name);
++                    return EINVAL;
++                }
+             }
+         } else {
+             ret = sysdb_getpwnam_with_views(preq, dom, name, &res);
+-- 
+2.9.5
+
