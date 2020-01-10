@@ -1,0 +1,30 @@
+From 7bcb2d855b62408aa7a4cf2cdf102b8305621cc5 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Thu, 24 Nov 2016 10:57:44 +0100
+Subject: [PATCH 117/117] SYSDB: Only process aliases if they are non-NULL
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reviewed-by: Fabiano Fidêncio <fidencio@redhat.com>
+(cherry picked from commit 6ec33f5acfba6fa266c1dd7722c0c7bb88333f7f)
+---
+ src/db/sysdb_sudo.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/db/sysdb_sudo.c b/src/db/sysdb_sudo.c
+index de1e8da699e31669477d9cc26662b8fc1e0b5f18..420c9e673ddc0f4d99a52c0112780d8d13e778f9 100644
+--- a/src/db/sysdb_sudo.c
++++ b/src/db/sysdb_sudo.c
+@@ -259,7 +259,7 @@ sysdb_get_sudo_filter(TALLOC_CTX *mem_ctx, const char *username, char **aliases,
+                                                  sanitized);
+         NULL_CHECK(specific_filter, ret, done);
+ 
+-        if (case_sensitive_domain == false) {
++        if (case_sensitive_domain == false && aliases != NULL) {
+             for (i = 0; aliases[i] != NULL; i++) {
+                 specific_filter = talloc_asprintf_append(specific_filter, "(%s=%s)",
+                                                          SYSDB_SUDO_CACHE_AT_USER,
+-- 
+2.7.4
+

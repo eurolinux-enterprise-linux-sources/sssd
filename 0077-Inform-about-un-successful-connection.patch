@@ -1,0 +1,37 @@
+From 2a1d189b2503e6a6ab7b581086504610ef444ae9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pavel=20B=C5=99ezina?= <pbrezina@redhat.com>
+Date: Wed, 6 Apr 2016 13:20:59 +0200
+Subject: [PATCH 77/77] Inform about (un)successful connection
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 8eb4a1f773b6c2246b0a6c6e3c3b8ef4d79c9ca6)
+---
+ src/providers/ldap/sdap_async_connection.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/providers/ldap/sdap_async_connection.c b/src/providers/ldap/sdap_async_connection.c
+index b3ecf2c8f1aa76239fbad0b14e5521c8cb6865bf..e473e8f65bd33b018a8e0a911db22234f4b43b25 100644
+--- a/src/providers/ldap/sdap_async_connection.c
++++ b/src/providers/ldap/sdap_async_connection.c
+@@ -2032,6 +2032,9 @@ int sdap_cli_connect_recv(struct tevent_req *req,
+     if (tevent_req_is_error(req, &tstate, &err)) {
+         /* mark the server as bad if connection failed */
+         if (state->srv) {
++            DEBUG(SSSDBG_OP_FAILURE, "Unable to establish connection "
++                  "[%"PRIu64"]: %s\n", err, sss_strerror(err));
++
+             be_fo_set_port_status(state->be, state->service->name,
+                                   state->srv, PORT_NOT_WORKING);
+         } else {
+@@ -2045,6 +2048,8 @@ int sdap_cli_connect_recv(struct tevent_req *req,
+         }
+         return EIO;
+     } else if (state->srv) {
++        DEBUG(SSSDBG_TRACE_FUNC, "Connection established.\n");
++
+         be_fo_set_port_status(state->be, state->service->name,
+                               state->srv, PORT_WORKING);
+     }
+-- 
+2.7.4
+

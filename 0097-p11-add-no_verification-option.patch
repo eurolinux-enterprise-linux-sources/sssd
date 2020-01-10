@@ -1,0 +1,409 @@
+From 4264d9b15e7c916f22bff504b59568a17cae2ccb Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Thu, 24 Mar 2016 20:42:12 +0100
+Subject: [PATCH 97/99] p11: add no_verification option
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit aa35995ef056aa8ae052a47c62c6750b7adf065e)
+(cherry picked from commit 6e0e5c73873990ef2d3069fff178323718d5bed4)
+---
+ src/man/sssd.conf.5.xml            |  8 ++++++
+ src/p11_child/p11_child_nss.c      | 44 ++++++++++++++++--------------
+ src/responder/ssh/sshsrv_cmd.c     |  7 +++--
+ src/tests/cmocka/test_cert_utils.c |  4 ++-
+ src/tests/cmocka/test_pam_srv.c    | 27 ++++++++++++++++++
+ src/util/cert.h                    |  2 +-
+ src/util/cert/libcrypto/cert.c     |  2 +-
+ src/util/cert/nss/cert.c           | 20 ++++++++------
+ src/util/util.c                    | 56 ++++++++++++++++++++++++++++++--------
+ src/util/util.h                    |  7 ++++-
+ 10 files changed, 129 insertions(+), 48 deletions(-)
+
+diff --git a/src/man/sssd.conf.5.xml b/src/man/sssd.conf.5.xml
+index a93a2fccf30f61649b0443d19fdc4283bc6aa0f6..6fd7d46c9b118d1954fb40b21672c4560e35b0af 100644
+--- a/src/man/sssd.conf.5.xml
++++ b/src/man/sssd.conf.5.xml
+@@ -383,6 +383,14 @@
+                                         the client.</para>
+                                     </listitem>
+                                 </varlistentry>
++                                <varlistentry>
++                                    <term>no_verification</term>
++                                    <listitem>
++                                        <para>Disables verification completely.
++                                        This option should only be used for
++                                        testing.</para>
++                                    </listitem>
++                                </varlistentry>
+                                 </variablelist>
+                             </para>
+                             <para>
+diff --git a/src/p11_child/p11_child_nss.c b/src/p11_child/p11_child_nss.c
+index 0d4ed1b794a40ec157af8ce10f109650876f229c..3719f8df2274ef9a197992ea3971c04d4838ef1e 100644
+--- a/src/p11_child/p11_child_nss.c
++++ b/src/p11_child/p11_child_nss.c
+@@ -70,8 +70,9 @@ static char *password_passthrough(PK11SlotInfo *slot, PRBool retry, void *arg)
+ 
+ 
+ int do_work(TALLOC_CTX *mem_ctx, const char *nss_db, const char *slot_name_in,
+-            enum op_mode mode, const char *pin, bool do_ocsp, char **cert,
+-            char **token_name_out)
++            enum op_mode mode, const char *pin,
++            struct cert_verify_opts *cert_verify_opts,
++            char **cert, char **token_name_out)
+ {
+     int ret;
+     SECStatus rv;
+@@ -263,7 +264,7 @@ int do_work(TALLOC_CTX *mem_ctx, const char *nss_db, const char *slot_name_in,
+         return EIO;
+     }
+ 
+-    if (do_ocsp) {
++    if (cert_verify_opts->do_ocsp) {
+         rv = CERT_EnableOCSPChecking(handle);
+         if (rv != SECSuccess) {
+             DEBUG(SSSDBG_OP_FAILURE, "CERT_EnableOCSPChecking failed: [%d].\n",
+@@ -282,15 +283,18 @@ int do_work(TALLOC_CTX *mem_ctx, const char *nss_db, const char *slot_name_in,
+                              cert_list_node->cert->nickname,
+                              cert_list_node->cert->subjectName);
+ 
+-            rv = CERT_VerifyCertificateNow(handle, cert_list_node->cert,
+-                                           PR_TRUE, certificateUsageSSLClient,
+-                                           NULL, NULL);
+-            if (rv != SECSuccess) {
+-                DEBUG(SSSDBG_OP_FAILURE,
+-                      "Certificate [%s][%s] not valid [%d], skipping.\n",
+-                      cert_list_node->cert->nickname,
+-                      cert_list_node->cert->subjectName, PR_GetError());
+-                continue;
++            if (cert_verify_opts->do_verification) {
++                rv = CERT_VerifyCertificateNow(handle, cert_list_node->cert,
++                                               PR_TRUE,
++                                               certificateUsageSSLClient,
++                                               NULL, NULL);
++                if (rv != SECSuccess) {
++                    DEBUG(SSSDBG_OP_FAILURE,
++                          "Certificate [%s][%s] not valid [%d], skipping.\n",
++                          cert_list_node->cert->nickname,
++                          cert_list_node->cert->subjectName, PR_GetError());
++                    continue;
++                }
+             }
+ 
+ 
+@@ -466,7 +470,7 @@ int main(int argc, const char *argv[])
+     char *slot_name_in = NULL;
+     char *token_name_out = NULL;
+     char *nss_db = NULL;
+-    bool do_ocsp = true;
++    struct cert_verify_opts *cert_verify_opts;
+     char *verify_opts = NULL;
+ 
+     struct poptOption long_options[] = {
+@@ -613,12 +617,10 @@ int main(int argc, const char *argv[])
+     }
+     talloc_steal(main_ctx, debug_prg_name);
+ 
+-    if (verify_opts != NULL) {
+-        ret = parse_cert_verify_opts(verify_opts, &do_ocsp);
+-        if (ret != EOK) {
+-            DEBUG(SSSDBG_FATAL_FAILURE, "Failed to parse verifiy option.\n");
+-            goto fail;
+-        }
++    ret = parse_cert_verify_opts(main_ctx, verify_opts, &cert_verify_opts);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_FATAL_FAILURE, "Failed to parse verifiy option.\n");
++        goto fail;
+     }
+ 
+     if (mode == OP_AUTH && pin_mode == PIN_STDIN) {
+@@ -629,8 +631,8 @@ int main(int argc, const char *argv[])
+         }
+     }
+ 
+-    ret = do_work(main_ctx, nss_db, slot_name_in, mode, pin, do_ocsp, &cert,
+-                  &token_name_out);
++    ret = do_work(main_ctx, nss_db, slot_name_in, mode, pin, cert_verify_opts,
++                  &cert, &token_name_out);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_OP_FAILURE, "do_work failed.\n");
+         goto fail;
+diff --git a/src/responder/ssh/sshsrv_cmd.c b/src/responder/ssh/sshsrv_cmd.c
+index af385fde8b382da513dbac29f496462a90c4c269..5954cec1ba3a688ae2d14f2304d722d91c26d592 100644
+--- a/src/responder/ssh/sshsrv_cmd.c
++++ b/src/responder/ssh/sshsrv_cmd.c
+@@ -798,7 +798,7 @@ static errno_t decode_and_add_base64_data(struct ssh_cmd_ctx *cmd_ctx,
+     size_t d;
+     TALLOC_CTX *tmp_ctx;
+     char *cert_verification_opts;
+-    bool do_ocsp = true;
++    struct cert_verify_opts *cert_verify_opts;
+ 
+     if (el == NULL) {
+         DEBUG(SSSDBG_TRACE_ALL, "Mssing element, nothing to do.\n");
+@@ -826,7 +826,8 @@ static errno_t decode_and_add_base64_data(struct ssh_cmd_ctx *cmd_ctx,
+             }
+ 
+             if (cert_verification_opts != NULL) {
+-                ret = parse_cert_verify_opts(cert_verification_opts, &do_ocsp);
++                ret = parse_cert_verify_opts(tmp_ctx, cert_verification_opts,
++                                             &cert_verify_opts);
+                 if (ret != EOK) {
+                     DEBUG(SSSDBG_FATAL_FAILURE,
+                           "Failed to parse verifiy option.\n");
+@@ -836,7 +837,7 @@ static errno_t decode_and_add_base64_data(struct ssh_cmd_ctx *cmd_ctx,
+ 
+             ret = cert_to_ssh_key(tmp_ctx, ssh_ctx->ca_db,
+                                   el->values[d].data, el->values[d].length,
+-                                  do_ocsp, &key, &key_len);
++                                  cert_verify_opts, &key, &key_len);
+             if (ret != EOK) {
+                 DEBUG(SSSDBG_OP_FAILURE, "cert_to_ssh_key failed.\n");
+                 return ret;
+diff --git a/src/tests/cmocka/test_cert_utils.c b/src/tests/cmocka/test_cert_utils.c
+index 658391d147154d7381d4f1ab74f199453fcab352..35e8cb7513968079861048a7e8b0631229f202c0 100644
+--- a/src/tests/cmocka/test_cert_utils.c
++++ b/src/tests/cmocka/test_cert_utils.c
+@@ -345,6 +345,8 @@ void test_cert_to_ssh_key(void **state)
+     size_t exp_key_size;
+     uint8_t *der;
+     size_t der_size;
++    struct cert_verify_opts cert_verify_opts = { .do_ocsp = false,
++                                                 .do_verification = true };
+ 
+     struct test_state *ts = talloc_get_type_abort(*state, struct test_state);
+     assert_non_null(ts);
+@@ -356,7 +358,7 @@ void test_cert_to_ssh_key(void **state)
+     assert_non_null(exp_key);
+ 
+     ret = cert_to_ssh_key(ts, "sql:" ABS_SRC_DIR "/src/tests/cmocka/p11_nssdb",
+-                          der, der_size, false, &key, &key_size);
++                          der, der_size, &cert_verify_opts, &key, &key_size);
+     assert_int_equal(ret, EOK);
+     assert_int_equal(key_size, exp_key_size);
+     assert_memory_equal(key, exp_key, exp_key_size);
+diff --git a/src/tests/cmocka/test_pam_srv.c b/src/tests/cmocka/test_pam_srv.c
+index 749f406e7e56b58d901bbe2b4ef28a9726299c49..4db0d2791933513351164d574d2f8527787ae67c 100644
+--- a/src/tests/cmocka/test_pam_srv.c
++++ b/src/tests/cmocka/test_pam_srv.c
+@@ -325,6 +325,30 @@ static int pam_test_setup(void **state)
+     return 0;
+ }
+ 
++static int pam_test_setup_no_verification(void **state)
++{
++    struct sss_test_conf_param dom_params[] = {
++        { "enumerate", "false" },
++        { "cache_credentials", "true" },
++        { NULL, NULL }, /* Sentinel */
++    };
++
++    struct sss_test_conf_param pam_params[] = {
++        { "p11_child_timeout", "30" },
++        { NULL, NULL }, /* Sentinel */
++    };
++
++    struct sss_test_conf_param monitor_params[] = {
++        { "certificate_verification", "no_verification" },
++        { NULL, NULL }, /* Sentinel */
++    };
++
++    test_pam_setup(dom_params, pam_params, monitor_params, state);
++
++    pam_test_setup_common();
++    return 0;
++}
++
+ static int pam_cached_test_setup(void **state)
+ {
+     struct sss_test_conf_param dom_params[] = {
+@@ -1718,6 +1742,9 @@ int main(int argc, const char *argv[])
+                                    pam_test_setup, pam_test_teardown),
+         cmocka_unit_test_setup_teardown(test_pam_cert_auth,
+                                         pam_test_setup, pam_test_teardown),
++        cmocka_unit_test_setup_teardown(test_pam_cert_auth,
++                                        pam_test_setup_no_verification,
++                                        pam_test_teardown),
+ #endif /* HAVE_NSS */
+     };
+ 
+diff --git a/src/util/cert.h b/src/util/cert.h
+index c8c42548745baaed5a39addde911d4d6e9305462..bb64d0d7a0a48207df60f6e6e554da5e16a16b03 100644
+--- a/src/util/cert.h
++++ b/src/util/cert.h
+@@ -47,6 +47,6 @@ errno_t bin_to_ldap_filter_value(TALLOC_CTX *mem_ctx,
+ 
+ errno_t cert_to_ssh_key(TALLOC_CTX *mem_ctx, const char *ca_db,
+                         const uint8_t *der_blob, size_t der_size,
+-                        bool do_ocsp,
++                        struct cert_verify_opts *cert_verify_opts,
+                         uint8_t **key, size_t *key_size);
+ #endif /* __CERT_H__ */
+diff --git a/src/util/cert/libcrypto/cert.c b/src/util/cert/libcrypto/cert.c
+index 4e2dbe70cafcb31e9ca4cc232dacb0cc176b0dc0..a7752d7c12ffede5b1a12d7c9ea3ca827128ca37 100644
+--- a/src/util/cert/libcrypto/cert.c
++++ b/src/util/cert/libcrypto/cert.c
+@@ -172,7 +172,7 @@ done:
+ 
+ errno_t cert_to_ssh_key(TALLOC_CTX *mem_ctx, const char *ca_db,
+                         const uint8_t *der_blob, size_t der_size,
+-                        bool do_ocsp,
++                        struct cert_verify_opts *cert_verify_opts,
+                         uint8_t **key, size_t *key_size)
+ {
+     int ret;
+diff --git a/src/util/cert/nss/cert.c b/src/util/cert/nss/cert.c
+index fbd063cf5f0c0100dab32f8ff14339b80979039a..9c1c965dd29d118092a264d315b392f74d905142 100644
+--- a/src/util/cert/nss/cert.c
++++ b/src/util/cert/nss/cert.c
+@@ -223,7 +223,7 @@ done:
+ 
+ errno_t cert_to_ssh_key(TALLOC_CTX *mem_ctx, const char *ca_db,
+                         const uint8_t *der_blob, size_t der_size,
+-                        bool do_ocsp,
++                        struct cert_verify_opts *cert_verify_opts,
+                         uint8_t **key, size_t *key_size)
+ {
+     CERTCertDBHandle *handle;
+@@ -259,7 +259,7 @@ errno_t cert_to_ssh_key(TALLOC_CTX *mem_ctx, const char *ca_db,
+ 
+     handle = CERT_GetDefaultCertDB();
+ 
+-    if (do_ocsp) {
++    if (cert_verify_opts->do_ocsp) {
+         rv = CERT_EnableOCSPChecking(handle);
+         if (rv != SECSuccess) {
+             DEBUG(SSSDBG_OP_FAILURE, "CERT_EnableOCSPChecking failed: [%d].\n",
+@@ -278,13 +278,15 @@ errno_t cert_to_ssh_key(TALLOC_CTX *mem_ctx, const char *ca_db,
+         goto done;
+     }
+ 
+-    rv = CERT_VerifyCertificateNow(handle, cert, PR_TRUE,
+-                                   certificateUsageSSLClient, NULL, NULL);
+-    if (rv != SECSuccess) {
+-        DEBUG(SSSDBG_CRIT_FAILURE, "CERT_VerifyCertificateNow failed [%d].\n",
+-                                   PR_GetError());
+-        ret = EACCES;
+-        goto done;
++    if (cert_verify_opts->do_verification) {
++        rv = CERT_VerifyCertificateNow(handle, cert, PR_TRUE,
++                                       certificateUsageSSLClient, NULL, NULL);
++        if (rv != SECSuccess) {
++            DEBUG(SSSDBG_CRIT_FAILURE, "CERT_VerifyCertificateNow failed [%d].\n",
++                                       PR_GetError());
++            ret = EACCES;
++            goto done;
++        }
+     }
+ 
+     cert_pub_key = CERT_ExtractPublicKey(cert);
+diff --git a/src/util/util.c b/src/util/util.c
+index c30fa07862c871c3ad46c082dcf87d26c367f8fa..b46fe63d667563deb722372e25df59be2d3a4501 100644
+--- a/src/util/util.c
++++ b/src/util/util.c
+@@ -1107,23 +1107,47 @@ errno_t sss_unique_filename(TALLOC_CTX *owner, char *path_tmpl)
+     return ret;
+ }
+ 
+-errno_t parse_cert_verify_opts(const char *verify_opts, bool *do_ocsp)
++static struct cert_verify_opts *init_cert_verify_opts(TALLOC_CTX *mem_ctx)
++{
++    struct cert_verify_opts *cert_verify_opts;
++
++    cert_verify_opts = talloc(mem_ctx, struct cert_verify_opts);
++    if (cert_verify_opts == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "talloc_new failed.\n");
++        return NULL;
++    }
++
++    cert_verify_opts->do_ocsp = true;
++    cert_verify_opts->do_verification = true;
++
++    return cert_verify_opts;
++}
++
++errno_t parse_cert_verify_opts(TALLOC_CTX *mem_ctx, const char *verify_opts,
++                               struct cert_verify_opts **_cert_verify_opts)
+ {
+     int ret;
+     TALLOC_CTX *tmp_ctx;
+     char **opts;
+     size_t c;
++    struct cert_verify_opts *cert_verify_opts;
++
++    tmp_ctx = talloc_new(NULL);
++    if (tmp_ctx == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "talloc_new failed.\n");
++        return ENOMEM;
++    }
++
++    cert_verify_opts = init_cert_verify_opts(tmp_ctx);
++    if (cert_verify_opts == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "init_cert_verify_opts failed.\n");
++        ret = ENOMEM;
++        goto done;
++    }
+ 
+     if (verify_opts == NULL) {
+-        *do_ocsp = true;
+-
+-        return EOK;
+-    }
+-
+-    tmp_ctx = talloc_new(NULL);
+-    if (tmp_ctx == NULL) {
+-        DEBUG(SSSDBG_OP_FAILURE, "talloc_new failed.\n");
+-        return ENOMEM;
++        ret = EOK;
++        goto done;
+     }
+ 
+     ret = split_on_separator(tmp_ctx, verify_opts, ',', true, true, &opts,
+@@ -1137,7 +1161,13 @@ errno_t parse_cert_verify_opts(const char *verify_opts, bool *do_ocsp)
+         if (strcasecmp(opts[c], "no_ocsp") == 0) {
+             DEBUG(SSSDBG_TRACE_ALL,
+                   "Found 'no_ocsp' option, disabling OCSP.\n");
+-            *do_ocsp = false;
++            cert_verify_opts->do_ocsp = false;
++        } else if (strcasecmp(opts[c], "no_verification") == 0) {
++            DEBUG(SSSDBG_CRIT_FAILURE,
++                  "Found 'no_verification' option, "
++                  "disabling verification completely. "
++                  "This should not be used in production.\n");
++            cert_verify_opts->do_verification = false;
+         } else {
+             DEBUG(SSSDBG_CRIT_FAILURE,
+                   "Unsupported certificate verification option [%s], " \
+@@ -1148,6 +1178,10 @@ errno_t parse_cert_verify_opts(const char *verify_opts, bool *do_ocsp)
+     ret = EOK;
+ 
+ done:
++    if (ret == EOK) {
++        *_cert_verify_opts = talloc_steal(mem_ctx, cert_verify_opts);
++    }
++
+     talloc_free(tmp_ctx);
+ 
+     return ret;
+diff --git a/src/util/util.h b/src/util/util.h
+index 0bf773960775bdef92182b7f2ca4098db369e71f..5a0202be485676064db3916e6384b772fbd1ac4f 100644
+--- a/src/util/util.h
++++ b/src/util/util.h
+@@ -432,8 +432,13 @@ int split_on_separator(TALLOC_CTX *mem_ctx, const char *str,
+ 
+ char **parse_args(const char *str);
+ 
+-errno_t parse_cert_verify_opts(const char *verify_opts, bool *do_ocsp);
++struct cert_verify_opts {
++    bool do_ocsp;
++    bool do_verification;
++};
+ 
++errno_t parse_cert_verify_opts(TALLOC_CTX *mem_ctx, const char *verify_opts,
++                               struct cert_verify_opts **cert_verify_opts);
+ 
+ errno_t sss_hash_create(TALLOC_CTX *mem_ctx,
+                         unsigned long count,
+-- 
+2.7.4
+

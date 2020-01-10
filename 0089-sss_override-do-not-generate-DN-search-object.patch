@@ -1,0 +1,81 @@
+From 5ab08fa33aecbfe991d4c4c36b85c2762d407411 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Fri, 8 Apr 2016 14:43:22 +0200
+Subject: [PATCH 89/89] sss_override: do not generate DN, search object
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+DNs of existing objects can not be generate reliable because the use of
+fully qualified names and upper and lower cases in names has to be
+considered. The most reliable way to get the DN is to search the object
+and take the DN from the result.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/2989
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit e6e2d1575ac7feb3494649f94ef51ef13cbdce48)
+---
+ src/tools/sss_override.c | 34 +++++++++++++++++++++++++++-------
+ 1 file changed, 27 insertions(+), 7 deletions(-)
+
+diff --git a/src/tools/sss_override.c b/src/tools/sss_override.c
+index 187f4622f24ea8e0a1ee5f624ac0ac44212a962f..a9e6d2b6c4cce82b238b13bed62cd09cf097cd23 100644
+--- a/src/tools/sss_override.c
++++ b/src/tools/sss_override.c
+@@ -612,6 +612,7 @@ static errno_t get_object_dn(TALLOC_CTX *mem_ctx,
+     struct ldb_dn *ldb_dn;
+     const char *str_dn;
+     errno_t ret;
++    struct ldb_result *res;
+ 
+     tmp_ctx = talloc_new(NULL);
+     if (tmp_ctx == NULL) {
+@@ -621,17 +622,36 @@ static errno_t get_object_dn(TALLOC_CTX *mem_ctx,
+ 
+     switch (type) {
+     case SYSDB_MEMBER_USER:
+-       ldb_dn = sysdb_user_dn(tmp_ctx, domain, name);
+-       break;
++        ret = sysdb_getpwnam(tmp_ctx, domain, name, &res);
++        break;
+     case SYSDB_MEMBER_GROUP:
+-       ldb_dn = sysdb_group_dn(tmp_ctx, domain, name);
+-       break;
++        ret = sysdb_getgrnam(tmp_ctx, domain, name, &res);
++        break;
+     default:
+-       DEBUG(SSSDBG_CRIT_FAILURE, "Unsupported member type %d\n", type);
+-       ret = ERR_INTERNAL;
+-       goto done;
++        DEBUG(SSSDBG_CRIT_FAILURE, "Unsupported member type %d\n", type);
++        ret = ERR_INTERNAL;
++        goto done;
+     }
+ 
++    if (ret != EOK) {
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "Failed to look up original object in cache.\n");
++        goto done;
++    }
++
++    if (res->count == 0) {
++        DEBUG(SSSDBG_MINOR_FAILURE, "Original object not found in cache.\n");
++        ret = ENOENT;
++        goto done;
++    } else if (res->count > 1) {
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "There are multiple object with name [%s] in the cache.\n", name);
++        ret = EINVAL;
++        goto done;
++    }
++
++    ldb_dn = res->msgs[0]->dn;
++
+     if (ldb_dn == NULL) {
+         ret = ENOMEM;
+         goto done;
+-- 
+2.7.4
+

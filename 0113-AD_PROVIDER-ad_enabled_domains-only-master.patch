@@ -1,0 +1,59 @@
+From 746105fd14d4600027622709c216d250ba6c2ae8 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Petr=20=C4=8Cech?= <pcech@redhat.com>
+Date: Thu, 3 Nov 2016 08:42:07 +0100
+Subject: [PATCH 113/114] AD_PROVIDER: ad_enabled_domains - only master
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+We can skip looking up other domains if option ad_enabled_domains
+contains only master domain.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/2828
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit 49f38702e62bbd1728757063ba407444e6270952)
+---
+ src/providers/ad/ad_subdomains.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/src/providers/ad/ad_subdomains.c b/src/providers/ad/ad_subdomains.c
+index 5e16b53471ccf92a021f6a0ca922da005be96515..90945c23227aa808b82884e5e03c4021cfdbe561 100644
+--- a/src/providers/ad/ad_subdomains.c
++++ b/src/providers/ad/ad_subdomains.c
+@@ -647,6 +647,7 @@ static void ad_subdomains_get_conn_done(struct tevent_req *req)
+         goto fail;
+     }
+ 
++    /* connect to the DC we are a member of */
+     req = ad_master_domain_send(ctx, ctx->sd_ctx->be_ctx->ev,
+                                 ctx->sd_ctx->ldap_ctx,
+                                 ctx->sdap_op,
+@@ -697,6 +698,22 @@ static void ad_subdomains_master_dom_done(struct tevent_req *req)
+         goto done;
+     }
+ 
++    /*
++     * If ad_enabled_domains contains only master domain
++     * we shouldn't lookup other domains.
++     */
++    if (ctx->sd_ctx->ad_enabled_domains != NULL) {
++        if (talloc_array_length(ctx->sd_ctx->ad_enabled_domains) == 2) {
++            if (strcasecmp(ctx->sd_ctx->ad_enabled_domains[0],
++                           ctx->sd_ctx->be_ctx->domain->name) == 0) {
++                DEBUG(SSSDBG_TRACE_FUNC,
++                      "No other enabled domain than master.\n");
++                ret = EOK;
++                goto done;
++            }
++        }
++    }
++
+     if (ctx->forest == NULL ||
+           strcasecmp(ctx->sd_ctx->be_ctx->domain->name, ctx->forest) != 0) {
+         DEBUG(SSSDBG_TRACE_FUNC,
+-- 
+2.7.4
+

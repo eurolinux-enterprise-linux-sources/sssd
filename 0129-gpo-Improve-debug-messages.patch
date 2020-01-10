@@ -1,0 +1,56 @@
+From c25244db75467c5949af27cbe4dcc70995d76cf3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20=C5=BDidek?= <mzidek@redhat.com>
+Date: Thu, 19 Jan 2017 11:44:32 +0100
+Subject: [PATCH 129/129] gpo: Improve debug messages
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Improve debug messages during security filtering. It was not possible
+to figure out why the GPO was filtered by reading the logs, because
+we use the same debug message in various cases.
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit 47680083e7e4bf5c433657171bf84cceacc83339)
+(cherry picked from commit 9bf6c4b5afb5054282f7b8c4c5f7bed26a259f5a)
+---
+ src/providers/ad/ad_gpo.c | 9 ++++++---
+ 1 file changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/src/providers/ad/ad_gpo.c b/src/providers/ad/ad_gpo.c
+index 14680de64afc3a3e85a7fc58bd969501776d675b..d12f5325d6f9077919ff802f5ae7bc339aeaf18d 100644
+--- a/src/providers/ad/ad_gpo.c
++++ b/src/providers/ad/ad_gpo.c
+@@ -860,7 +860,8 @@ ad_gpo_filter_gpos_by_dacl(TALLOC_CTX *mem_ctx,
+         /* gpo_func_version must be set to version 2 */
+         if (candidate_gpo->gpo_func_version != 2) {
+             DEBUG(SSSDBG_TRACE_ALL,
+-                  "GPO not applicable to target per security filtering\n");
++                  "GPO not applicable to target per security filtering: "
++                  "gPCFunctionalityVersion is not 2\n");
+             continue;
+         }
+ 
+@@ -876,7 +877,8 @@ ad_gpo_filter_gpos_by_dacl(TALLOC_CTX *mem_ctx,
+         /* gpo_flags value of 2 means that GPO's computer portion is disabled */
+         if (candidate_gpo->gpo_flags == 2) {
+             DEBUG(SSSDBG_TRACE_ALL,
+-                  "GPO not applicable to target per security filtering\n");
++                  "GPO not applicable to target per security filtering: "
++                  "GPO's computer portion is disabled\n");
+             continue;
+         }
+ 
+@@ -907,7 +909,8 @@ ad_gpo_filter_gpos_by_dacl(TALLOC_CTX *mem_ctx,
+             gpo_dn_idx++;
+         } else {
+             DEBUG(SSSDBG_TRACE_ALL,
+-                  "GPO not applicable to target per security filtering\n");
++                  "GPO not applicable to target per security filtering: "
++                  "result of DACL evaluation\n");
+             continue;
+         }
+     }
+-- 
+2.11.0
+

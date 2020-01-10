@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE reference PUBLIC "-//OASIS//DTD DocBook V4.4//EN"
+"http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<reference>
+<title>SSSD-Handbuchseiten</title>
+<refentry>
+    <xi:include xmlns:xi="http://www.w3.org/2001/XInclude" href="include/upstream.xml" />
+
+    <refmeta>
+        <refentrytitle>sss_cache</refentrytitle>
+        <manvolnum>8</manvolnum>
+    </refmeta>
+
+    <refnamediv id='name'>
+        <refname>sss_cache</refname>
+        <refpurpose>führt eine Bereinigung des Zwischenspeichers durch.</refpurpose>
+    </refnamediv>
+
+    <refsynopsisdiv id='synopsis'>
+        <cmdsynopsis>
+<command>sss_cache</command> <arg choice='opt'>
+<replaceable>Optionen</replaceable> </arg></cmdsynopsis>
+    </refsynopsisdiv>
+
+    <refsect1 id='description'>
+        <title>BESCHREIBUNG</title>
+        <para>
+            <command>sss_cache</command> annulliert Datensätze im
+SSSD-Zwischenspeicher. Annullierte Datensätze werden zwangsweise neu vom
+Server geladen, sobald das zugehörige SSSD-Backend online ist.
+        </para>
+    </refsect1>
+
+    <refsect1 id='options'>
+        <title>OPTIONEN</title>
+        <variablelist remap='IP'>
+            <varlistentry>
+                <term>
+                    <option>-E</option>,<option>--everything</option>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert alle zwischengespeicherten Einträge mit Ausnahme von Sudo-Regeln.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>-u</option>,<option>--user</option>
+<replaceable>Anmeldung</replaceable>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert einen bestimmten Benutzer.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>-U</option>,<option>--users</option>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert alle Benutzerdatensätze. Diese Option setzt das Annullieren
+bestimmter Benutzer außer Kraft, falls es ebenfalls gesetzt war.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>-g</option>,<option>--group</option>
+<replaceable>Gruppe</replaceable>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert eine bestimmte Gruppe.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>-G</option>,<option>--groups</option>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert alle Gruppendatensätze. Diese Option setzt das Annullieren
+bestimmter Gruppen außer Kraft, falls es ebenfalls gesetzt war.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>-n</option>,<option>--netgroup</option>
+<replaceable>Netzgruppe</replaceable>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert eine bestimmte Netzgruppe.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>-N</option>,<option>--netgroups</option>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert alle Netzgruppendatensätze. Diese Option setzt das Annullieren
+bestimmter Netzgruppen außer Kraft, falls es ebenfalls gesetzt war.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>-s</option>,<option>--service</option>
+<replaceable>Dienst</replaceable>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert einen bestimmten Dienst.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>-S</option>,<option>--services</option>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert alle Dienstdatensätze. Diese Option setzt das Annullieren
+bestimmter Dienste außer Kraft, falls es ebenfalls gesetzt war.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry condition="with_autofs">
+                <term>
+                    <option>-a</option>,<option>--autofs-map</option>
+<replaceable>Autofs-Abbildung</replaceable>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert eine bestimmte Autofs-Abbildung.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry condition="with_autofs">
+                <term>
+                    <option>-A</option>,<option>--autofs-maps</option>
+                </term>
+                <listitem>
+                    <para>
+                        annulliert alle Autofs-Abbildungen. Diese Option setzt das Annullieren
+bestimmter Abbildungen außer Kraft, falls es ebenfalls gesetzt war.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry condition="with_ssh">
+                <term>
+                    <option>-h</option>,<option>--ssh-host</option>
+<replaceable>hostname</replaceable>
+                </term>
+                <listitem>
+                    <para>
+                        Invalidate SSH public keys of a specific host.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry condition="with_ssh">
+                <term>
+                    <option>-H</option>,<option>--ssh-hosts</option>
+                </term>
+                <listitem>
+                    <para>
+                        Invalidate SSH public keys of all hosts. This option overrides invalidation
+of SSH public keys of specific host if it was also set.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>-d</option>,<option>--domain</option>
+<replaceable>Domain</replaceable>
+                </term>
+                <listitem>
+                    <para>
+                        begrenzt den Annullierungsprozess auf eine bestimmte Domain.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <xi:include xmlns:xi="http://www.w3.org/2001/XInclude" href="include/param_help.xml" />
+        </variablelist>
+    </refsect1>
+
+    <xi:include xmlns:xi="http://www.w3.org/2001/XInclude" href="include/seealso.xml" />
+
+</refentry>
+</reference>

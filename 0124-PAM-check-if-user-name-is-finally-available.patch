@@ -1,0 +1,36 @@
+From 4bee8e23b3376093ffcb45a5f300ba1646044548 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 14 Dec 2016 13:20:20 +0100
+Subject: [PATCH 124/124] PAM: check if user name is finally available
+
+---
+ src/sss_client/pam_sss.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/sss_client/pam_sss.c b/src/sss_client/pam_sss.c
+index 26679b988341ce68538cdeb9ac412a139cc51daf..a992f9818290021fbec774c7479c4ee5cf59a544 100644
+--- a/src/sss_client/pam_sss.c
++++ b/src/sss_client/pam_sss.c
+@@ -1798,6 +1798,7 @@ static int pam_sss(enum sss_cli_command task, pam_handle_t *pamh,
+                     if (pam_status != PAM_SUCCESS) {
+                         D(("send_and_receive returned [%d] during pre-auth",
+                            pam_status));
++
+                         /*
+                          * Since we are only interested in the result message
+                          * and will always use password authentication
+@@ -1815,6 +1816,11 @@ static int pam_sss(enum sss_cli_command task, pam_handle_t *pamh,
+                     }
+                 }
+ 
++                /* We need a user name at this stage */
++                if (pi.pam_user == NULL || *pi.pam_user == '\0') {
++                    return PAM_CRED_INSUFFICIENT;
++                }
++
+                 ret = get_authtok_for_authentication(pamh, &pi, flags);
+                 if (ret != PAM_SUCCESS) {
+                     D(("failed to get authentication token: %s",
+-- 
+2.9.3
+

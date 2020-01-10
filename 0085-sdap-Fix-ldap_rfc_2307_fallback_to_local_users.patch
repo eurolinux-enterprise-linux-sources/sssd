@@ -1,0 +1,42 @@
+From 2e15bcc15459f1708e5ad6e12c2115106564ea49 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20=C5=BDidek?= <mzidek@redhat.com>
+Date: Wed, 13 Jul 2016 20:02:47 +0200
+Subject: [PATCH 85/85] sdap: Fix ldap_rfc_2307_fallback_to_local_users
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+We wrongly tried to store empty
+user attributes instead of the
+local user attributes with
+ldap_rfc_2307_fallback_to_local_users
+set to true. This gave us bad
+initgroups results and caused
+segfaults.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3045
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit aa8ec3758d885d6ae4088174369d30f8493ec898)
+---
+ src/providers/ldap/sdap_async_initgroups.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/providers/ldap/sdap_async_initgroups.c b/src/providers/ldap/sdap_async_initgroups.c
+index fa19876a4a60e1396d3b5940a828cfababe886fe..960df008230fb1c8614386b661b2a14faef6e8ba 100644
+--- a/src/providers/ldap/sdap_async_initgroups.c
++++ b/src/providers/ldap/sdap_async_initgroups.c
+@@ -2859,6 +2859,9 @@ static void sdap_get_initgr_user(struct tevent_req *subreq)
+             (dp_opt_get_bool(state->opts->basic,
+                              SDAP_RFC2307_FALLBACK_TO_LOCAL_USERS) == true)) {
+             ret = sdap_fallback_local_user(state, state->name, -1, &usr_attrs);
++            if (ret == EOK) {
++                state->orig_user = usr_attrs[0];
++            }
+         } else {
+             ret = ENOENT;
+         }
+-- 
+2.7.4
+

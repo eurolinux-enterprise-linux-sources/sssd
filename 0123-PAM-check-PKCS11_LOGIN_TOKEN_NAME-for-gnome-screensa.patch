@@ -1,0 +1,27 @@
+From 84c0201c9db41fa0d35f4ff7d698dc590e4c5a13 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 14 Dec 2016 11:57:27 +0100
+Subject: [PATCH 123/124] PAM: check PKCS11_LOGIN_TOKEN_NAME for
+ gnome-screensaver
+
+---
+ src/sss_client/pam_sss.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/sss_client/pam_sss.c b/src/sss_client/pam_sss.c
+index 885df373b649d63eb436039515aa2337e9747bb7..26679b988341ce68538cdeb9ac412a139cc51daf 100644
+--- a/src/sss_client/pam_sss.c
++++ b/src/sss_client/pam_sss.c
+@@ -1806,7 +1806,8 @@ static int pam_sss(enum sss_cli_command task, pam_handle_t *pamh,
+                     }
+                 }
+ 
+-                if (strcmp(pi.pam_service, "gdm-smartcard") == 0) {
++                if (strcmp(pi.pam_service, "gdm-smartcard") == 0
++                        || strcmp(pi.pam_service, "gnome-screensaver") == 0) {
+                     ret = check_login_token_name(pamh, &pi, quiet_mode);
+                     if (ret != PAM_SUCCESS) {
+                         D(("check_login_token_name failed.\n"));
+-- 
+2.9.3
+

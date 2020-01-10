@@ -1,0 +1,39 @@
+From 4b0687f232c8c70037bbfd2da1fb1f0fc525e3aa Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Fri, 8 Apr 2016 18:40:48 +0200
+Subject: [PATCH 88/89] tools: read additional data of the master domain
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/2989
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit 3a8b5ccf7c27b72054e1d8b3ab355cb1e28efda9)
+---
+ src/tools/common/sss_tools.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/tools/common/sss_tools.c b/src/tools/common/sss_tools.c
+index d3073a2e534fefa7a82a2e5c162eb22e1d433bc1..b916f772b7333e23119aa417a74a6897ba1f8e4d 100644
+--- a/src/tools/common/sss_tools.c
++++ b/src/tools/common/sss_tools.c
+@@ -137,6 +137,14 @@ static errno_t sss_tool_domains_init(TALLOC_CTX *mem_ctx,
+     for (dom = domains; dom != NULL;
+             dom = get_next_domain(dom, SSS_GND_DESCEND)) {
+         if (!IS_SUBDOMAIN(dom)) {
++            /* Get flat name and domain ID (SID) from the cache
++             * if available */
++            ret = sysdb_master_domain_update(dom);
++            if (ret != EOK) {
++                DEBUG(SSSDBG_MINOR_FAILURE, "Failed to update domain %s.\n",
++                                            dom->name);
++            }
++
+             /* Update list of subdomains for this domain */
+             ret = sysdb_update_subdomains(dom);
+             if (ret != EOK) {
+-- 
+2.7.4
+

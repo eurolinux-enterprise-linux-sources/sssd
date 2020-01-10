@@ -1,0 +1,72 @@
+From e72b8f1007e95d63191b1e97edc2c5dcd36e6235 Mon Sep 17 00:00:00 2001
+From: Petr Cech <pcech@redhat.com>
+Date: Mon, 20 Jun 2016 09:19:03 -0300
+Subject: [PATCH 73/74] SYSDB: Fixing DB update
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Functions sysdb_user_base_dn() and sysdb_group_base_dn() expect
+that struct sss_domain_info contains pointer to struct sysdb_ctx.
+This is not true in case of sysdb_upgrade functions.
+This patch fixes the situation and revert code to the state before
+12a000c8c7c07259e438fb1e992134bdd07d9a30 commit.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3023
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+Reviewed-by: Sumit Bose <sbose@redhat.com>
+(cherry picked from commit 311836214245600566f881ff6253594e0999008e)
+(cherry picked from commit 0a7784d3584a5a6db1e0251e1bcc9dd1790f1f38)
+---
+ src/db/sysdb_upgrade.c | 22 +++++++++++++++++++---
+ 1 file changed, 19 insertions(+), 3 deletions(-)
+
+diff --git a/src/db/sysdb_upgrade.c b/src/db/sysdb_upgrade.c
+index 113f24644e3e3de1d4c46d375492c2fe1e6b2f83..48beb898bc74a155fcf74e2228115a75a19deb6f 100644
+--- a/src/db/sysdb_upgrade.c
++++ b/src/db/sysdb_upgrade.c
+@@ -443,12 +443,23 @@ int sysdb_check_upgrade_02(struct sss_domain_info *domains,
+             goto done;
+         }
+ 
+-        users_dn = sysdb_user_base_dn(tmp_ctx, dom);
++        /*
++         * dom->sysdb->ldb is not initialized,
++         * so ldb_dn_new_fmt() shouldn't be changed to sysdb_*_base_dn()
++         */
++        users_dn = ldb_dn_new_fmt(tmp_ctx, sysdb->ldb,
++                                  SYSDB_TMPL_USER_BASE, dom->name);
+         if (!users_dn) {
+             ret = ENOMEM;
+             goto done;
+         }
+-        groups_dn = sysdb_group_base_dn(tmp_ctx, dom);
++
++        /*
++         * dom->sysdb->ldb is not initialized,
++         * so ldb_dn_new_fmt() shouldn't be changed to sysdb_*_base_dn()
++         */
++        groups_dn = ldb_dn_new_fmt(tmp_ctx, sysdb->ldb,
++                                   SYSDB_TMPL_GROUP_BASE, dom->name);
+         if (!groups_dn) {
+             ret = ENOMEM;
+             goto done;
+@@ -1045,7 +1056,12 @@ int sysdb_upgrade_10(struct sysdb_ctx *sysdb, struct sss_domain_info *domain,
+         return ret;
+     }
+ 
+-    basedn = sysdb_user_base_dn(tmp_ctx, domain);
++    /*
++     * dom->sysdb->ldb is not initialized,
++     * so ldb_dn_new_fmt() shouldn't be changed to sysdb_*_base_dn()
++     */
++    basedn = ldb_dn_new_fmt(tmp_ctx, sysdb->ldb,
++                            SYSDB_TMPL_USER_BASE, domain->name);
+     if (basedn == NULL) {
+         ret = EIO;
+         goto done;
+-- 
+2.7.4
+

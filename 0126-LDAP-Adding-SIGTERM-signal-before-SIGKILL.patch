@@ -1,0 +1,103 @@
+From 9ebcf305f5e45ee43f3f27bcbbd7aba1a67cc97c Mon Sep 17 00:00:00 2001
+From: Petr Cech <pcech@redhat.com>
+Date: Thu, 4 Aug 2016 16:27:40 +0200
+Subject: [PATCH 126/127] LDAP: Adding SIGTERM signal before SIGKILL
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+We add better termination of ldap_child. If ldap_child reaches
+the timeout for termination parent sents SIGTERM signal. Child
+has 2 seconds for removing temporary file and exit.
+If it is not sufficient there is SIGKILL send to the child.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3106
+
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+---
+ src/providers/ldap/sdap_child_helpers.c | 40 +++++++++++++++++++++++++++++----
+ src/util/child_common.h                 |  1 +
+ 2 files changed, 37 insertions(+), 4 deletions(-)
+
+diff --git a/src/providers/ldap/sdap_child_helpers.c b/src/providers/ldap/sdap_child_helpers.c
+index 92642e8e47e530e5aef5f78bf1c7a2427979275e..2c0757d9a8c3f82779175da4a540f019ae1575d6 100644
+--- a/src/providers/ldap/sdap_child_helpers.c
++++ b/src/providers/ldap/sdap_child_helpers.c
+@@ -416,9 +416,7 @@ int sdap_get_tgt_recv(struct tevent_req *req,
+     return EOK;
+ }
+ 
+-
+-
+-static void get_tgt_timeout_handler(struct tevent_context *ev,
++static void get_tgt_sigkill_handler(struct tevent_context *ev,
+                                     struct tevent_timer *te,
+                                     struct timeval tv, void *pvt)
+ {
+@@ -428,7 +426,8 @@ static void get_tgt_timeout_handler(struct tevent_context *ev,
+     int ret;
+ 
+     DEBUG(SSSDBG_TRACE_ALL,
+-          "timeout for tgt child [%d] reached.\n", state->child->pid);
++          "timeout for sending SIGKILL to tgt child [%d] reached.\n",
++          state->child->pid);
+ 
+     ret = kill(state->child->pid, SIGKILL);
+     if (ret == -1) {
+@@ -439,6 +438,39 @@ static void get_tgt_timeout_handler(struct tevent_context *ev,
+     tevent_req_error(req, ETIMEDOUT);
+ }
+ 
++static void get_tgt_timeout_handler(struct tevent_context *ev,
++                                      struct tevent_timer *te,
++                                      struct timeval tv, void *pvt)
++{
++    struct tevent_req *req = talloc_get_type(pvt, struct tevent_req);
++    struct sdap_get_tgt_state *state = tevent_req_data(req,
++                                            struct sdap_get_tgt_state);
++    int ret;
++
++    DEBUG(SSSDBG_TRACE_ALL,
++          "timeout for sending SIGTERM to tgt child [%d] reached.\n",
++          state->child->pid);
++
++    ret = kill(state->child->pid, SIGTERM);
++    if (ret == -1) {
++        ret = errno;
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "Sending SIGTERM failed [%d][%s].\n", ret, strerror(ret));
++    }
++
++    DEBUG(SSSDBG_TRACE_FUNC,
++          "Setting %d seconds timeout for sending SIGKILL to tgt child\n",
++          SIGTERM_TO_SIGKILL_TIME);
++
++    tv = tevent_timeval_current_ofs(SIGTERM_TO_SIGKILL_TIME, 0);
++
++    te = tevent_add_timer(ev, req, tv, get_tgt_sigkill_handler, req);
++    if (te == NULL) {
++        DEBUG(SSSDBG_CRIT_FAILURE, "tevent_add_timer failed.\n");
++        tevent_req_error(req, ECANCELED);
++    }
++}
++
+ static errno_t set_tgt_child_timeout(struct tevent_req *req,
+                                      struct tevent_context *ev,
+                                      int timeout)
+diff --git a/src/util/child_common.h b/src/util/child_common.h
+index d843cc36d20f9b0214ea1d2b1fa26251080303a7..37116e2a73ede765f68b3dba8ab69aea432303bb 100644
+--- a/src/util/child_common.h
++++ b/src/util/child_common.h
+@@ -35,6 +35,7 @@
+ #define IN_BUF_SIZE         512
+ #define CHILD_MSG_CHUNK     256
+ 
++#define SIGTERM_TO_SIGKILL_TIME 2
+ #define CHILD_TIMEOUT_EXIT_CODE 7
+ 
+ struct response {
+-- 
+2.11.0
+

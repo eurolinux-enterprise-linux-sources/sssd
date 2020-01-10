@@ -1,0 +1,73 @@
+From 3819ab7c5668eb7494029609f7bec031e448b83c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20=C5=BDidek?= <mzidek@redhat.com>
+Date: Thu, 15 Dec 2016 15:16:51 +0100
+Subject: [PATCH 128/129] GPO: Skip GPOs without gPCFunctionalityVersion
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+We falsely stopped GPO processing when Group Policy Container
+in AD did not contain gPCFunctionalityVersion. Such GPOs
+should be ignored by SSSD according to MS-GPOL:
+https://msdn.microsoft.com/en-us/library/cc232538.aspx
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3269
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit 6a490b312075d2588ad87bbb8a63466f1ac6a106)
+(cherry picked from commit 94903da8a3723094948b4b99b30f6449fed809da)
+---
+ src/providers/ad/ad_gpo.c | 22 +++++++++++++++++++---
+ 1 file changed, 19 insertions(+), 3 deletions(-)
+
+diff --git a/src/providers/ad/ad_gpo.c b/src/providers/ad/ad_gpo.c
+index 44ee15c85d212cc4da8689f76a816a41c986b722..14680de64afc3a3e85a7fc58bd969501776d675b 100644
+--- a/src/providers/ad/ad_gpo.c
++++ b/src/providers/ad/ad_gpo.c
+@@ -853,8 +853,6 @@ ad_gpo_filter_gpos_by_dacl(TALLOC_CTX *mem_ctx,
+ 
+         access_allowed = false;
+         candidate_gpo = candidate_gpos[i];
+-        sd = candidate_gpo->gpo_sd;
+-        dacl = candidate_gpo->gpo_sd->dacl;
+ 
+         DEBUG(SSSDBG_TRACE_ALL, "examining dacl candidate_gpo_guid:%s\n",
+                                 candidate_gpo->gpo_guid);
+@@ -866,6 +864,15 @@ ad_gpo_filter_gpos_by_dacl(TALLOC_CTX *mem_ctx,
+             continue;
+         }
+ 
++        sd = candidate_gpo->gpo_sd;
++        if (sd == NULL) {
++            DEBUG(SSSDBG_TRACE_ALL, "Security descriptor is missing\n");
++            ret = EINVAL;
++            goto done;
++        }
++
++        dacl = candidate_gpo->gpo_sd->dacl;
++
+         /* gpo_flags value of 2 means that GPO's computer portion is disabled */
+         if (candidate_gpo->gpo_flags == 2) {
+             DEBUG(SSSDBG_TRACE_ALL,
+@@ -3836,7 +3843,16 @@ ad_gpo_sd_process_attrs(struct tevent_req *req,
+     /* retrieve AD_AT_FUNC_VERSION */
+     ret = sysdb_attrs_get_int32_t(result, AD_AT_FUNC_VERSION,
+                                   &gp_gpo->gpo_func_version);
+-    if (ret != EOK) {
++    if (ret == ENOENT) {
++        /* If this attrbute is missing we can skip the GPO. It will
++         * be filtered out according to MS-GPOL:
++         * https://msdn.microsoft.com/en-us/library/cc232538.aspx */
++        DEBUG(SSSDBG_TRACE_ALL, "GPO with GUID %s is missing attribute "
++              AD_AT_FUNC_VERSION " and will be skipped.\n", gp_gpo->gpo_guid);
++        state->gpo_index++;
++        ret = ad_gpo_get_gpo_attrs_step(req);
++        goto done;
++    } else if (ret != EOK) {
+         DEBUG(SSSDBG_OP_FAILURE,
+               "sysdb_attrs_get_int32_t failed: [%d](%s)\n",
+               ret, sss_strerror(ret));
+-- 
+2.11.0
+

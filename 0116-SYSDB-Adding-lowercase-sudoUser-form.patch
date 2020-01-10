@@ -1,0 +1,334 @@
+From fd2d599dfde825f4daf88fa2815eefe6395a8450 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Petr=20=C4=8Cech?= <pcech@redhat.com>
+Date: Wed, 12 Oct 2016 16:48:38 +0200
+Subject: [PATCH 116/116] SYSDB: Adding lowercase sudoUser form
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+If domain is not case sensitive we add lowercase form of usernames
+to sudoUser attributes. So we actually able to apply sudoRule on
+user Administrator@... with login admnistrator@...
+
+This patch is squashed with
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3203
+(cherry picked from commit f4a1046bb88d7a0ab3617e49ae94bfa849d10645)
+
+Squashed with:
+SYSDB: Fixing of sudorule without a sudoUser
+
+This patch solved a regression caused by the recent patches
+to lowercase sudoUser -- in case sudoUser is missing completely,
+we abort the processing of this rule and all others.
+
+With this patch, we return ERR_MALFORMED_ENTRY and gracefully
+skip the malformed rule instead.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3241
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit b6d0b0a14c7f09371cbb2afd0347f6a16fcfc8dd)
+---
+ src/db/sysdb_sudo.c                        | 110 ++++++++++++++++++++++++++++-
+ src/db/sysdb_sudo.h                        |   7 +-
+ src/responder/sudo/sudosrv_get_sudorules.c |  15 ++--
+ 3 files changed, 122 insertions(+), 10 deletions(-)
+
+diff --git a/src/db/sysdb_sudo.c b/src/db/sysdb_sudo.c
+index 76116abacb20219f0c1dcdde755e8268e10fd293..de1e8da699e31669477d9cc26662b8fc1e0b5f18 100644
+--- a/src/db/sysdb_sudo.c
++++ b/src/db/sysdb_sudo.c
+@@ -216,9 +216,9 @@ done:
+ }
+ 
+ errno_t
+-sysdb_get_sudo_filter(TALLOC_CTX *mem_ctx, const char *username,
+-                      uid_t uid, char **groupnames, unsigned int flags,
+-                      char **_filter)
++sysdb_get_sudo_filter(TALLOC_CTX *mem_ctx, const char *username, char **aliases,
++                      uid_t uid, char **groupnames, bool case_sensitive_domain,
++                      unsigned int flags, char **_filter)
+ {
+     TALLOC_CTX *tmp_ctx = NULL;
+     char *filter = NULL;
+@@ -258,6 +258,15 @@ sysdb_get_sudo_filter(TALLOC_CTX *mem_ctx, const char *username,
+                                                  SYSDB_SUDO_CACHE_AT_USER,
+                                                  sanitized);
+         NULL_CHECK(specific_filter, ret, done);
++
++        if (case_sensitive_domain == false) {
++            for (i = 0; aliases[i] != NULL; i++) {
++                specific_filter = talloc_asprintf_append(specific_filter, "(%s=%s)",
++                                                         SYSDB_SUDO_CACHE_AT_USER,
++                                                         aliases[i]);
++                NULL_CHECK(specific_filter, ret, done);
++            }
++        }
+     }
+ 
+     if ((flags & SYSDB_SUDO_FILTER_UID) && (uid != 0)) {
+@@ -320,6 +329,7 @@ errno_t
+ sysdb_get_sudo_user_info(TALLOC_CTX *mem_ctx,
+                          struct sss_domain_info *domain,
+                          const char *username, uid_t *_uid,
++                         char ***_aliases,
+                          char ***groupnames)
+ {
+     TALLOC_CTX *tmp_ctx;
+@@ -327,15 +337,19 @@ sysdb_get_sudo_user_info(TALLOC_CTX *mem_ctx,
+     struct ldb_message *msg;
+     struct ldb_message *group_msg = NULL;
+     char **sysdb_groupnames = NULL;
++    char **sysdb_aliases = NULL;
+     const char *primary_group = NULL;
+     struct ldb_message_element *groups;
++    struct ldb_message_element *aliases;
+     uid_t uid = 0;
+     gid_t gid = 0;
+     size_t num_groups = 0;
++    size_t num_aliases = 0;
+     int i;
+     const char *attrs[] = { SYSDB_MEMBEROF,
+                             SYSDB_GIDNUM,
+                             SYSDB_UIDNUM,
++                            SYSDB_NAME_ALIAS,
+                             NULL };
+     const char *group_attrs[] = { SYSDB_NAME,
+                                   NULL };
+@@ -358,6 +372,24 @@ sysdb_get_sudo_user_info(TALLOC_CTX *mem_ctx,
+         }
+     }
+ 
++    aliases = ldb_msg_find_element(msg, SYSDB_NAME_ALIAS);
++    if (!aliases || aliases->num_values == 0) {
++        /* No nameAlias for this user in sysdb currently */
++        sysdb_aliases = NULL;
++        num_aliases = 0;
++    } else {
++        num_aliases = aliases->num_values;
++        sysdb_aliases = talloc_array(tmp_ctx, char *, num_aliases + 1);
++        NULL_CHECK(sysdb_aliases, ret, done);
++
++        for (i = 0; i < aliases->num_values; i++) {
++            sysdb_aliases[i] = talloc_strdup(sysdb_aliases,
++                                         (const char *)aliases->values[i].data);
++            NULL_CHECK(sysdb_aliases[i], ret, done);
++        }
++        sysdb_aliases[aliases->num_values] = NULL;
++    }
++
+     /* resolve secondary groups */
+     if (groupnames != NULL) {
+         groups = ldb_msg_find_element(msg, SYSDB_MEMBEROF);
+@@ -421,6 +453,10 @@ sysdb_get_sudo_user_info(TALLOC_CTX *mem_ctx,
+         *_uid = uid;
+     }
+ 
++    if (sysdb_aliases != NULL) {
++        *_aliases = talloc_steal(mem_ctx, sysdb_aliases);
++    }
++
+     if (groupnames != NULL) {
+         *groupnames = talloc_steal(mem_ctx, sysdb_groupnames);
+     }
+@@ -801,6 +837,65 @@ sysdb_sudo_add_sss_attrs(struct sysdb_attrs *rule,
+     return EOK;
+ }
+ 
++static errno_t sysdb_sudo_add_lowered_users(struct sss_domain_info *domain,
++                                            struct sysdb_attrs *rule)
++{
++    TALLOC_CTX *tmp_ctx;
++    const char **users = NULL;
++    const char *lowered = NULL;
++    errno_t ret;
++
++    if (domain->case_sensitive == true || rule == NULL) {
++        return EOK;
++    }
++
++    tmp_ctx = talloc_new(NULL);
++    if (tmp_ctx == NULL) {
++        return ENOMEM;
++    }
++
++    ret = sysdb_attrs_get_string_array(rule, SYSDB_SUDO_CACHE_AT_USER, tmp_ctx,
++                                       &users);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE, "Unable to get %s attribute [%d]: %s\n",
++              SYSDB_SUDO_CACHE_AT_USER, ret, strerror(ret));
++        ret = ERR_MALFORMED_ENTRY;
++        goto done;
++    }
++    if (users == NULL) {
++        ret =  EOK;
++        goto done;
++    }
++
++    for (int i = 0; users[i] != NULL; i++) {
++        lowered = sss_tc_utf8_str_tolower(tmp_ctx, users[i]);
++        if (lowered == NULL) {
++            DEBUG(SSSDBG_OP_FAILURE, "Cannot convert name to lowercase.\n");
++            ret = ENOMEM;
++            goto done;
++        }
++
++        if (strcmp(users[i], lowered) == 0) {
++            /* It protects us from adding duplicate. */
++            continue;
++        }
++
++        ret = sysdb_attrs_add_string(rule, SYSDB_SUDO_CACHE_AT_USER, lowered);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE,
++                  "Unable to add %s attribute [%d]: %s\n",
++                  SYSDB_SUDO_CACHE_AT_USER, ret, strerror(ret));
++            goto done;
++        }
++    }
++
++    ret = EOK;
++
++done:
++    talloc_zfree(tmp_ctx);
++    return ret;
++}
++
+ static errno_t
+ sysdb_sudo_store_rule(struct sss_domain_info *domain,
+                       struct sysdb_attrs *rule,
+@@ -817,6 +912,11 @@ sysdb_sudo_store_rule(struct sss_domain_info *domain,
+ 
+     DEBUG(SSSDBG_TRACE_FUNC, "Adding sudo rule %s\n", name);
+ 
++    ret = sysdb_sudo_add_lowered_users(domain, rule);
++    if (ret != EOK) {
++        return ret;
++    }
++
+     ret = sysdb_sudo_add_sss_attrs(rule, name, cache_timeout, now);
+     if (ret != EOK) {
+         return ret;
+@@ -862,6 +962,10 @@ sysdb_sudo_store(struct sss_domain_info *domain,
+             /* Multiple CNs are error on server side, we can just ignore this
+              * rule and save the others. Loud debug message is in logs. */
+             continue;
++        } else if (ret == ERR_MALFORMED_ENTRY) {
++            /* Attribute SYSDB_SUDO_CACHE_AT_USER is missing but we can
++             * continue with next sudoRule. */
++            continue;
+         } else if (ret != EOK) {
+             goto done;
+         }
+diff --git a/src/db/sysdb_sudo.h b/src/db/sysdb_sudo.h
+index 515f45ab8b8f51cf7b1d27c1ba28ed8182bce6c0..896bcb355ef5bc8c3562d6706b5a90efb107653a 100644
+--- a/src/db/sysdb_sudo.h
++++ b/src/db/sysdb_sudo.h
+@@ -97,14 +97,15 @@ errno_t sysdb_sudo_filter_rules_by_time(TALLOC_CTX *mem_ctx,
+                                         struct sysdb_attrs ***_rules);
+ 
+ errno_t
+-sysdb_get_sudo_filter(TALLOC_CTX *mem_ctx, const char *username,
+-                      uid_t uid, char **groupnames, unsigned int flags,
+-                      char **_filter);
++sysdb_get_sudo_filter(TALLOC_CTX *mem_ctx, const char *username, char **aliases,
++                      uid_t uid, char **groupnames, bool case_sensitive_domain,
++                      unsigned int flags, char **_filter);
+ 
+ errno_t
+ sysdb_get_sudo_user_info(TALLOC_CTX *mem_ctx,
+                          struct sss_domain_info *domain,
+                          const char *username, uid_t *_uid,
++                         char ***_aliases,
+                          char ***groupnames);
+ 
+ errno_t sysdb_sudo_set_last_full_refresh(struct sss_domain_info *domain,
+diff --git a/src/responder/sudo/sudosrv_get_sudorules.c b/src/responder/sudo/sudosrv_get_sudorules.c
+index 75d8cac41d57ff65449cdf5ed3b08cf7d46d55c1..5527ec6f17e1b434cbffecbdeb73b9e4669cdf72 100644
+--- a/src/responder/sudo/sudosrv_get_sudorules.c
++++ b/src/responder/sudo/sudosrv_get_sudorules.c
+@@ -334,6 +334,7 @@ static errno_t sudosrv_get_sudorules_query_cache(TALLOC_CTX *mem_ctx,
+                                                  const char **attrs,
+                                                  unsigned int flags,
+                                                  const char *username,
++                                                 char **aliases,
+                                                  uid_t uid,
+                                                  char **groupnames,
+                                                  bool inverse_order,
+@@ -346,6 +347,7 @@ errno_t sudosrv_get_rules(struct sudo_cmd_ctx *cmd_ctx)
+     struct tevent_req *dpreq = NULL;
+     struct dp_callback_ctx *cb_ctx = NULL;
+     char **groupnames = NULL;
++    char **aliases = NULL;
+     uint32_t expired_rules_num = 0;
+     struct sysdb_attrs **expired_rules = NULL;
+     errno_t ret;
+@@ -383,7 +385,8 @@ errno_t sudosrv_get_rules(struct sudo_cmd_ctx *cmd_ctx)
+      * provider call
+      */
+     ret = sysdb_get_sudo_user_info(tmp_ctx, cmd_ctx->domain,
+-                                   cmd_ctx->orig_username, NULL, &groupnames);
++                                   cmd_ctx->orig_username, NULL,
++                                   &aliases, &groupnames);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_CRIT_FAILURE,
+              "Unable to retrieve user info [%d]: %s\n", ret, strerror(ret));
+@@ -397,6 +400,7 @@ errno_t sudosrv_get_rules(struct sudo_cmd_ctx *cmd_ctx)
+     ret = sudosrv_get_sudorules_query_cache(tmp_ctx,
+                                             cmd_ctx->domain, attrs, flags,
+                                             cmd_ctx->orig_username,
++                                            aliases,
+                                             cmd_ctx->uid, groupnames,
+                                             cmd_ctx->sudo_ctx->inverse_order,
+                                             &expired_rules, &expired_rules_num);
+@@ -556,6 +560,7 @@ static errno_t sudosrv_get_sudorules_from_cache(TALLOC_CTX *mem_ctx,
+     TALLOC_CTX *tmp_ctx;
+     errno_t ret;
+     char **groupnames = NULL;
++    char **aliases = NULL;
+     const char *debug_name = NULL;
+     unsigned int flags = SYSDB_SUDO_FILTER_NONE;
+     struct sysdb_attrs **rules = NULL;
+@@ -591,7 +596,7 @@ static errno_t sudosrv_get_sudorules_from_cache(TALLOC_CTX *mem_ctx,
+         ret = sysdb_get_sudo_user_info(tmp_ctx,
+                                        cmd_ctx->domain,
+                                        cmd_ctx->orig_username,
+-                                       NULL, &groupnames);
++                                       NULL, &aliases, &groupnames);
+         if (ret != EOK) {
+             DEBUG(SSSDBG_CRIT_FAILURE,
+                  "Unable to retrieve user info [%d]: %s\n",
+@@ -609,6 +614,7 @@ static errno_t sudosrv_get_sudorules_from_cache(TALLOC_CTX *mem_ctx,
+     ret = sudosrv_get_sudorules_query_cache(tmp_ctx,
+                                             cmd_ctx->domain, attrs, flags,
+                                             cmd_ctx->orig_username,
++                                            aliases,
+                                             cmd_ctx->uid, groupnames,
+                                             cmd_ctx->sudo_ctx->inverse_order,
+                                             &rules, &num_rules);
+@@ -643,6 +649,7 @@ static errno_t sudosrv_get_sudorules_query_cache(TALLOC_CTX *mem_ctx,
+                                                  const char **attrs,
+                                                  unsigned int flags,
+                                                  const char *username,
++                                                 char **aliases,
+                                                  uid_t uid,
+                                                  char **groupnames,
+                                                  bool inverse_order,
+@@ -659,8 +666,8 @@ static errno_t sudosrv_get_sudorules_query_cache(TALLOC_CTX *mem_ctx,
+     tmp_ctx = talloc_new(NULL);
+     if (tmp_ctx == NULL) return ENOMEM;
+ 
+-    ret = sysdb_get_sudo_filter(tmp_ctx, username, uid, groupnames,
+-                                flags, &filter);
++    ret = sysdb_get_sudo_filter(tmp_ctx, username, aliases, uid, groupnames,
++                                domain->case_sensitive, flags, &filter);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_CRIT_FAILURE,
+               "Could not construct the search filter [%d]: %s\n",
+-- 
+2.7.4
+

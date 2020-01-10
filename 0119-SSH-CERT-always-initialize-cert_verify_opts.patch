@@ -1,0 +1,43 @@
+From 084fcba698cfd7dcc5a8603c069e4ae335c00b20 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Fri, 17 Jun 2016 13:50:55 +0200
+Subject: [PATCH 119/119] SSH-CERT: always initialize cert_verify_opts
+
+Currently cert_verify_opts is only initialized when there is an option
+in the config file. This might cause issues later when the struct is
+accessed. Since parse_cert_verify_opts() can already handle an empty
+option the additional check is not needed at all.
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+---
+ src/responder/ssh/sshsrv_cmd.c | 14 ++++++--------
+ 1 file changed, 6 insertions(+), 8 deletions(-)
+
+diff --git a/src/responder/ssh/sshsrv_cmd.c b/src/responder/ssh/sshsrv_cmd.c
+index ba3b694d97821696ca0218c279c1f9d9859ab13e..89a173d47a2a1817ac6c2993e9b122e8083a92b3 100644
+--- a/src/responder/ssh/sshsrv_cmd.c
++++ b/src/responder/ssh/sshsrv_cmd.c
+@@ -819,14 +819,12 @@ static errno_t get_valid_certs_keys(TALLOC_CTX *mem_ctx,
+         goto done;
+     }
+ 
+-    if (cert_verification_opts != NULL) {
+-        ret = parse_cert_verify_opts(tmp_ctx, cert_verification_opts,
+-                                     &cert_verify_opts);
+-        if (ret != EOK) {
+-            DEBUG(SSSDBG_FATAL_FAILURE,
+-                  "Failed to parse verifiy option.\n");
+-            goto done;
+-        }
++    ret = parse_cert_verify_opts(tmp_ctx, cert_verification_opts,
++                                 &cert_verify_opts);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_FATAL_FAILURE,
++              "Failed to parse verifiy option.\n");
++        goto done;
+     }
+ 
+     el_res = talloc_zero(tmp_ctx, struct ldb_message_element);
+-- 
+2.7.4
+

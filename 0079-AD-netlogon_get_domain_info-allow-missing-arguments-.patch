@@ -1,0 +1,219 @@
+From 4d2e27a42d05f75d3746a07844710259072a65d5 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Tue, 12 Jul 2016 13:29:33 +0200
+Subject: [PATCH 79/83] AD: netlogon_get_domain_info() allow missing arguments
+ and empty results
+
+netlogon_get_domain_info() should not fail if not all parameters can be
+retrieved. It should be the responsibility of the caller to see if the
+needed data is available and act accordingly.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3104
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 44656ce260030556820c4b6be519e66ffdacb408)
+---
+ src/providers/ad/ad_common.h      |   1 +
+ src/providers/ad/ad_domain_info.c | 108 +++++++++++++++++++++-----------------
+ src/providers/ad/ad_gpo.c         |   2 +-
+ src/providers/ad/ad_subdomains.c  |   3 +-
+ 4 files changed, 64 insertions(+), 50 deletions(-)
+
+diff --git a/src/providers/ad/ad_common.h b/src/providers/ad/ad_common.h
+index e88a173ef1b275baef44739a1eb03aa31fedb930..cc66f3aa6e2e0b621bf6f038adaecc8fa759b3cc 100644
+--- a/src/providers/ad/ad_common.h
++++ b/src/providers/ad/ad_common.h
+@@ -187,6 +187,7 @@ errno_t ad_machine_account_password_renewal_init(struct be_ctx *be_ctx,
+ 
+ errno_t netlogon_get_domain_info(TALLOC_CTX *mem_ctx,
+                                  struct sysdb_attrs *reply,
++                                 bool check_next_nearest_site_as_well,
+                                  char **_flat_name,
+                                  char **_site,
+                                  char **_forest);
+diff --git a/src/providers/ad/ad_domain_info.c b/src/providers/ad/ad_domain_info.c
+index a06379c263878aa95741055636d0a12764f3ad8c..5302c8083bd832d0772829d9f3a4b8e9537d34b9 100644
+--- a/src/providers/ad/ad_domain_info.c
++++ b/src/providers/ad/ad_domain_info.c
+@@ -37,6 +37,7 @@
+ 
+ errno_t netlogon_get_domain_info(TALLOC_CTX *mem_ctx,
+                                  struct sysdb_attrs *reply,
++                                 bool check_next_nearest_site_as_well,
+                                  char **_flat_name,
+                                  char **_site,
+                                  char **_forest)
+@@ -47,9 +48,6 @@ errno_t netlogon_get_domain_info(TALLOC_CTX *mem_ctx,
+     struct ndr_pull *ndr_pull = NULL;
+     enum ndr_err_code ndr_err;
+     struct netlogon_samlogon_response response;
+-    const char *flat_name;
+-    const char *site;
+-    const char *forest;
+     TALLOC_CTX *tmp_ctx;
+ 
+     ret = sysdb_attrs_get_el(reply, AD_AT_NETLOGON, &el);
+@@ -102,57 +100,73 @@ errno_t netlogon_get_domain_info(TALLOC_CTX *mem_ctx,
+         goto done;
+     }
+ 
+-    /* get flat name */
+-    if (response.data.nt5_ex.domain_name != NULL &&
+-        *response.data.nt5_ex.domain_name != '\0') {
+-        flat_name = response.data.nt5_ex.domain_name;
+-    } else {
+-        DEBUG(SSSDBG_MINOR_FAILURE,
+-              "No netlogon domain name data available\n");
+-        ret = ENOENT;
+-        goto done;
++    /* get flat domain name */
++    if (_flat_name != NULL) {
++        if (response.data.nt5_ex.domain_name != NULL &&
++            *response.data.nt5_ex.domain_name != '\0') {
++            *_flat_name = talloc_strdup(mem_ctx,
++                                        response.data.nt5_ex.domain_name);
++            if (*_flat_name == NULL) {
++                DEBUG(SSSDBG_OP_FAILURE, "talloc_strdup failed.\n");
++                ret = ENOMEM;
++                goto done;
++            }
++        } else {
++            DEBUG(SSSDBG_MINOR_FAILURE,
++                  "No netlogon flat domain name data available.\n");
++            *_flat_name = NULL;
++        }
+     }
+ 
+-    *_flat_name = talloc_strdup(mem_ctx, flat_name);
+-    if (*_flat_name == NULL) {
+-        DEBUG(SSSDBG_OP_FAILURE, "talloc_strdup failed.\n");
+-        ret = ENOMEM;
+-        goto done;
+-    }
+ 
+     /* get forest */
+-    if (response.data.nt5_ex.forest != NULL &&
+-        *response.data.nt5_ex.forest != '\0') {
+-        forest = response.data.nt5_ex.forest;
+-    } else {
+-        DEBUG(SSSDBG_MINOR_FAILURE, "No netlogon forest data available\n");
+-        ret = ENOENT;
+-        goto done;
+-    }
+-
+-    *_forest = talloc_strdup(mem_ctx, forest);
+-    if (*_forest == NULL) {
+-        DEBUG(SSSDBG_OP_FAILURE, "talloc_strdup failed.\n");
+-        ret = ENOMEM;
+-        goto done;
++    if (_forest != NULL) {
++        if (response.data.nt5_ex.forest != NULL &&
++            *response.data.nt5_ex.forest != '\0') {
++            *_forest = talloc_strdup(mem_ctx, response.data.nt5_ex.forest);
++            if (*_forest == NULL) {
++                DEBUG(SSSDBG_OP_FAILURE, "talloc_strdup failed.\n");
++                ret = ENOMEM;
++                goto done;
++            }
++        } else {
++            DEBUG(SSSDBG_MINOR_FAILURE, "No netlogon forest data available.\n");
++            *_forest = NULL;
++        }
+     }
+ 
+     /* get site name */
+-    if (response.data.nt5_ex.client_site != NULL
+-        && response.data.nt5_ex.client_site[0] != '\0') {
+-        site = response.data.nt5_ex.client_site;
+-    } else {
+-        DEBUG(SSSDBG_MINOR_FAILURE,
+-              "No netlogon site name data available\n");
+-        ret = ENOENT;
+-        goto done;
+-    }
++    if (_site != NULL) {
++        if (response.data.nt5_ex.client_site != NULL
++            && response.data.nt5_ex.client_site[0] != '\0') {
++            *_site = talloc_strdup(mem_ctx, response.data.nt5_ex.client_site);
++            if (*_site == NULL) {
++                DEBUG(SSSDBG_OP_FAILURE, "talloc_strdup failed.\n");
++                ret = ENOMEM;
++                goto done;
++            }
++        } else {
++            DEBUG(SSSDBG_MINOR_FAILURE,
++                  "No netlogon site name data available.\n");
++            *_site = NULL;
+ 
+-    *_site = talloc_strdup(mem_ctx, site);
+-    if (*_site == NULL) {
+-        DEBUG(SSSDBG_OP_FAILURE, "talloc_strdup failed.\n");
+-        ret = ENOMEM;
+-        goto done;
++            if (check_next_nearest_site_as_well) {
++                if (response.data.nt5_ex.next_closest_site != NULL
++                        && response.data.nt5_ex.next_closest_site[0] != '\0') {
++                    *_site = talloc_strdup(mem_ctx,
++                                        response.data.nt5_ex.next_closest_site);
++                    if (*_site == NULL) {
++                        DEBUG(SSSDBG_OP_FAILURE, "talloc_strdup failed.\n");
++                        ret = ENOMEM;
++                        goto done;
++                    }
++                } else {
++                    DEBUG(SSSDBG_MINOR_FAILURE,
++                          "No netlogon next closest site name data "
++                          "available.\n");
++                }
++            }
++        }
+     }
+ 
+     ret = EOK;
+@@ -388,7 +402,7 @@ ad_master_domain_netlogon_done(struct tevent_req *subreq)
+ 
+     /* Exactly one flat name. Carry on */
+ 
+-    ret = netlogon_get_domain_info(state, reply[0], &state->flat,
++    ret = netlogon_get_domain_info(state, reply[0], false, &state->flat,
+                                    &state->site, &state->forest);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_MINOR_FAILURE,
+diff --git a/src/providers/ad/ad_gpo.c b/src/providers/ad/ad_gpo.c
+index a169a40589f4d95cb31b2d8e9a302d2f155848c9..3cec012e23658fe87502f20fa0ddd98c3a347fde 100644
+--- a/src/providers/ad/ad_gpo.c
++++ b/src/providers/ad/ad_gpo.c
+@@ -2708,7 +2708,7 @@ ad_gpo_site_name_retrieval_done(struct tevent_req *subreq)
+     ret = ad_master_domain_recv(subreq, state, NULL, NULL, &site, NULL);
+     talloc_zfree(subreq);
+ 
+-    if (ret != EOK) {
++    if (ret != EOK || site == NULL) {
+         DEBUG(SSSDBG_OP_FAILURE, "Cannot retrieve master domain info\n");
+         tevent_req_error(req, ENOENT);
+         return;
+diff --git a/src/providers/ad/ad_subdomains.c b/src/providers/ad/ad_subdomains.c
+index 2e5d9120e473e32a84610d607ccf329249b4ac9e..65ea094e007a449a124267289e2e0b32302446a7 100644
+--- a/src/providers/ad/ad_subdomains.c
++++ b/src/providers/ad/ad_subdomains.c
+@@ -88,7 +88,6 @@ struct ad_subdomains_req_ctx {
+ 
+     char *master_sid;
+     char *flat_name;
+-    char *site;
+     char *forest;
+ };
+ 
+@@ -600,7 +599,7 @@ static void ad_subdomains_master_dom_done(struct tevent_req *req)
+ 
+     ret = ad_master_domain_recv(req, ctx,
+                                 &ctx->flat_name, &ctx->master_sid,
+-                                &ctx->site, &ctx->forest);
++                                NULL, &ctx->forest);
+     talloc_zfree(req);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_OP_FAILURE, "Cannot retrieve master domain info\n");
+-- 
+2.7.4
+

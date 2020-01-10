@@ -1,0 +1,90 @@
+From ac60d1745a06939fdc87db9485284dc88427df8e Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Fri, 18 Mar 2016 16:24:18 +0100
+Subject: [PATCH 96/99] p11: add missing man page entry and config API
+
+The pam_cert_auth and pam_cert_db_path option where missing in the
+config API and had no man page entries.
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 875c90d531e6869a92da4b515db729ffce7c4244)
+(cherry picked from commit b76a0026a115a8a0362b1693404830fa3c68418b)
+---
+ src/config/SSSDConfig/__init__.py.in |  2 ++
+ src/config/etc/sssd.api.conf         |  2 ++
+ src/man/sssd.conf.5.xml              | 27 ++++++++++++++++-----------
+ 3 files changed, 20 insertions(+), 11 deletions(-)
+
+diff --git a/src/config/SSSDConfig/__init__.py.in b/src/config/SSSDConfig/__init__.py.in
+index 189b9225f6374db3dfc253844e6239b39b8edb66..1cc2f1eca1104b8d70379437ef2a6add32385000 100644
+--- a/src/config/SSSDConfig/__init__.py.in
++++ b/src/config/SSSDConfig/__init__.py.in
+@@ -91,6 +91,8 @@ option_strings = {
+     'pam_public_domains' : _('List of domains accessible even for untrusted users.'),
+     'pam_account_expired_message' : _('Message printed when user account is expired.'),
+     'pam_account_locked_message' : _('Message printed when user account is locked.'),
++    'pam_cert_auth' : _('Allow certificate based/Smartcard authentication.'),
++    'pam_cert_db_path' : _('Path to certificate databse with PKCS#11 modules.'),
+     'p11_child_timeout' : _('How many seconds will pam_sss wait for p11_child to finish'),
+ 
+     # [sudo]
+diff --git a/src/config/etc/sssd.api.conf b/src/config/etc/sssd.api.conf
+index 6e00a87918b4c3972c1f05e5d66d0fc8a71a5cf7..a152d6f5e4d9554a3086a6fa0c400e582f33fb1e 100644
+--- a/src/config/etc/sssd.api.conf
++++ b/src/config/etc/sssd.api.conf
+@@ -61,6 +61,8 @@ pam_trusted_users = str, None, false
+ pam_public_domains = str, None, false
+ pam_account_expired_message = str, None, false
+ pam_account_locked_message = str, None, false
++pam_cert_auth = bool, None, false
++pam_cert_db_path = str, None, false
+ p11_child_timeout = int, None, false
+ 
+ [sudo]
+diff --git a/src/man/sssd.conf.5.xml b/src/man/sssd.conf.5.xml
+index 37197add75e8847ea83b2f9f6a46fa0521182b93..a93a2fccf30f61649b0443d19fdc4283bc6aa0f6 100644
+--- a/src/man/sssd.conf.5.xml
++++ b/src/man/sssd.conf.5.xml
+@@ -1047,23 +1047,28 @@ pam_account_locked_message = Account locked, please contact help desk.
+                     </listitem>
+                 </varlistentry>
+                 <varlistentry>
+-                    <term>pam_account_locked_message (string)</term>
++                    <term>pam_cert_auth (bool)</term>
+                     <listitem>
+                         <para>
+-                           If user is authenticating and
+-                           account is locked then by default
+-                           'Permission denied' is output. This output will
+-                           be changed to content of this variable if it is
+-                           set.
++                            Enable certificate based Smartcard authentication.
++                            Since this requires additional communication with
++                            the Smartcard which will delay the authentication
++                            process this option is disabled by default.
+                         </para>
+                         <para>
+-                            example:
+-                            <programlisting>
+-pam_account_locked_message = Account locked, please call help desk.
+-                            </programlisting>
++                            Default: False
++                        </para>
++                    </listitem>
++                </varlistentry>
++                <varlistentry>
++                    <term>pam_cert_db_path (string)</term>
++                    <listitem>
++                        <para>
++                            The path to the certificate database which contain
++                            the PKCS#11 modules to access the Smartcard.
+                         </para>
+                         <para>
+-                            Default: none
++                            Default: /etc/pki/nssdb (NSS version)
+                         </para>
+                     </listitem>
+                 </varlistentry>
+-- 
+2.7.4
+

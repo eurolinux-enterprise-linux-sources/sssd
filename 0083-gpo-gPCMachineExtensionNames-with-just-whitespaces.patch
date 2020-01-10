@@ -1,0 +1,91 @@
+From c5577993c5d878db288cefafd049fc07c971d967 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20=C5=BDidek?= <mzidek@redhat.com>
+Date: Fri, 29 Jul 2016 16:09:16 +0200
+Subject: [PATCH 83/83] gpo: gPCMachineExtensionNames with just whitespaces
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3114
+
+We failed GPO procesing if the gPCMachineExtensionNames
+attribute contained just whitespaces. This coused
+failures in some server settings.
+
+Comment from Alexander Bokovoy quoting:
+
+You should use MS-GPOL spec. 2.2.4 'GPO Search' section says that when
+processing gPCMachineExtensionNames, "Group Policy processing terminates
+at the first <CSE GUIDn> out of sequence."
+Since ' ' (space only) does not fall into defined syntax for
+gPCMachineExtensionNames, this Group Policy processing is stopped and
+its CSE GUIDs are set to 'empty list'.
+
+Because of the 3.2.5.1.10 'Extension Protocol Sequences' language
+------------------------------------------------------------------------
+The Group Policy client MUST evaluate the subset of the abstract element
+Filtered GPO list separately for each Group Policy extension by
+including in the subset only those GPOs whose gPCUserExtensionNames (for
+user policy mode) or gPCMachineExtensionNames (for computer policy mode)
+attributes contain CSE GUID that correspond to the Group Policy
+extension. If the CSE GUID corresponding to the Group Policy extension
+is present in Extension List, it is invoked using the
+Implementation Identifier field. Applicability is determined as
+specified in section 3.2.1.5. The Group Policy Registry Extension MUST
+always execute first. All other applicable Group Policy extensions in
+the Extension List MUST be loaded and executed in Extension List order.
+A failure in any Group Policy extension sequence MUST NOT affect the
+execution of other Group Policy extensions.
+-------------------------------------------------------------------------
+
+I think we can practically treat wrong content of
+gPCMachineExtensionNames (and gPCUserExtensionNames) as inability of the
+GPO to pass through the Filtered GPO list. Thus, the GPO would be
+ignored.
+
+Reviewed-by: Alexander Bokovoy <abokovoy@redhat.com>
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+---
+ src/providers/ad/ad_gpo.c | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/src/providers/ad/ad_gpo.c b/src/providers/ad/ad_gpo.c
+index 920457507b9597cced2b0a3091d0ac693e817e42..44ee15c85d212cc4da8689f76a816a41c986b722 100644
+--- a/src/providers/ad/ad_gpo.c
++++ b/src/providers/ad/ad_gpo.c
+@@ -3752,6 +3752,24 @@ done:
+    }
+ }
+ 
++static bool machine_ext_names_is_blank(char *attr_value)
++{
++    char *ptr;
++
++    if (attr_value == NULL) {
++        return true;
++    }
++
++    ptr = attr_value;
++    for (; *ptr != '\0'; ptr++) {
++        if (!isspace(*ptr)) {
++            return false;
++        }
++    }
++
++    return true;
++}
++
+ static errno_t
+ ad_gpo_sd_process_attrs(struct tevent_req *req,
+                         char *smb_host,
+@@ -3867,7 +3885,8 @@ ad_gpo_sd_process_attrs(struct tevent_req *req,
+         goto done;
+     }
+ 
+-    if ((ret == ENOENT) || (el->num_values == 0)) {
++    if ((ret == ENOENT) || (el->num_values == 0)
++            || machine_ext_names_is_blank((char *) el[0].values[0].data)) {
+         /*
+          * if gpo has no machine_ext_names (which is perfectly valid: it could
+          * have only user_ext_names, for example), we continue to next gpo
+-- 
+2.7.4
+

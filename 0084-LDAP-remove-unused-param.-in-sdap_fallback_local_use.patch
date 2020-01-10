@@ -1,0 +1,80 @@
+From 6e46370c407fd6e640f26f1f9496133afb2c48f7 Mon Sep 17 00:00:00 2001
+From: Pavel Reichl <preichl@redhat.com>
+Date: Sun, 11 Oct 2015 22:42:30 +0200
+Subject: [PATCH 84/85] LDAP: remove unused param. in sdap_fallback_local_user
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Remove unused sdap_options parameter.
+
+Required for #3045
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit 8b789d6f0a39cd497d1115203db2f1f8dc195456)
+---
+ src/providers/ldap/ldap_id.c               | 3 +--
+ src/providers/ldap/sdap_async_initgroups.c | 3 +--
+ src/providers/ldap/sdap_async_users.c      | 1 -
+ src/providers/ldap/sdap_users.h            | 5 ++---
+ 4 files changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/src/providers/ldap/ldap_id.c b/src/providers/ldap/ldap_id.c
+index 7a986f43775a3d0219c91386d667ba910180b425..696384cb9eee745959831682d555e60612bab0d8 100644
+--- a/src/providers/ldap/ldap_id.c
++++ b/src/providers/ldap/ldap_id.c
+@@ -474,8 +474,7 @@ static void users_get_done(struct tevent_req *subreq)
+         }
+ 
+         if (fallback) {
+-            ret = sdap_fallback_local_user(state, state->ctx->opts,
+-                                           name, uid, &usr_attrs);
++            ret = sdap_fallback_local_user(state, name, uid, &usr_attrs);
+             if (ret == EOK) {
+                 ret = sdap_save_user(state, state->ctx->opts, state->domain,
+                                      usr_attrs[0], NULL, 0);
+diff --git a/src/providers/ldap/sdap_async_initgroups.c b/src/providers/ldap/sdap_async_initgroups.c
+index 059b18354362a76376da9321118b8fdb12282b9a..fa19876a4a60e1396d3b5940a828cfababe886fe 100644
+--- a/src/providers/ldap/sdap_async_initgroups.c
++++ b/src/providers/ldap/sdap_async_initgroups.c
+@@ -2858,8 +2858,7 @@ static void sdap_get_initgr_user(struct tevent_req *subreq)
+         if ((state->opts->schema_type == SDAP_SCHEMA_RFC2307) &&
+             (dp_opt_get_bool(state->opts->basic,
+                              SDAP_RFC2307_FALLBACK_TO_LOCAL_USERS) == true)) {
+-            ret = sdap_fallback_local_user(state, state->opts,
+-                                           state->name, -1, &usr_attrs);
++            ret = sdap_fallback_local_user(state, state->name, -1, &usr_attrs);
+         } else {
+             ret = ENOENT;
+         }
+diff --git a/src/providers/ldap/sdap_async_users.c b/src/providers/ldap/sdap_async_users.c
+index 25dd40dfff08d08f25856bd1f00dfd3bb5eeb3d5..69396aeed23c44bc2cf878410d357984d875b6d8 100644
+--- a/src/providers/ldap/sdap_async_users.c
++++ b/src/providers/ldap/sdap_async_users.c
+@@ -939,7 +939,6 @@ int sdap_get_users_recv(struct tevent_req *req,
+ /* ==Fetch-Fallback-local-user============================================ */
+ 
+ errno_t sdap_fallback_local_user(TALLOC_CTX *memctx,
+-                                 struct sdap_options *opts,
+                                  const char *name, uid_t uid,
+                                  struct sysdb_attrs ***reply)
+ {
+diff --git a/src/providers/ldap/sdap_users.h b/src/providers/ldap/sdap_users.h
+index 1cc1cd1fa665a6c872236c14abbb9fc8482116ec..78dafb31a2a07e7289055daec77c5dc5da1bdeef 100644
+--- a/src/providers/ldap/sdap_users.h
++++ b/src/providers/ldap/sdap_users.h
+@@ -27,9 +27,8 @@
+ /* shared non-async user functions */
+ 
+ errno_t sdap_fallback_local_user(TALLOC_CTX *memctx,
+-                             struct sdap_options *opts,
+-                             const char *name, uid_t uid,
+-                             struct sysdb_attrs ***reply);
++                                 const char *name, uid_t uid,
++                                 struct sysdb_attrs ***reply);
+ 
+ int sdap_save_user(TALLOC_CTX *memctx,
+                    struct sdap_options *opts,
+-- 
+2.7.4
+

@@ -1,0 +1,506 @@
+From 4d257af21eb808709e0e368d06cfe7649a0e9e2f Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Thu, 7 Jul 2016 18:54:02 +0200
+Subject: [PATCH 108/110] views: properly override group member names
+
+Resolves https://fedorahosted.org/sssd/ticket/2948
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 1594701fbdc341069e11cff9a85e7a795e52db3d)
+---
+ src/db/sysdb.h                  |   3 +-
+ src/db/sysdb_search.c           |  99 ++++++++++++++++-------------
+ src/db/sysdb_views.c            | 135 ++++++++++++++++++----------------------
+ src/responder/nss/nsssrv_cmd.c  |   7 ++-
+ src/tests/cmocka/test_nss_srv.c |  67 ++++++++++++++++++++
+ 5 files changed, 191 insertions(+), 120 deletions(-)
+
+diff --git a/src/db/sysdb.h b/src/db/sysdb.h
+index 1f4a5edb0375519a9a15d26fa2e272a386178930..3c52c5b5186892d8bc254affc19ae65291a3d28a 100644
+--- a/src/db/sysdb.h
++++ b/src/db/sysdb.h
+@@ -546,7 +546,8 @@ errno_t sysdb_add_overrides_to_object(struct sss_domain_info *domain,
+                                       const char **req_attrs);
+ 
+ errno_t sysdb_add_group_member_overrides(struct sss_domain_info *domain,
+-                                         struct ldb_message *obj);
++                                         struct ldb_message *obj,
++                                         bool expect_override_dn);
+ 
+ errno_t sysdb_getpwnam_with_views(TALLOC_CTX *mem_ctx,
+                                   struct sss_domain_info *domain,
+diff --git a/src/db/sysdb_search.c b/src/db/sysdb_search.c
+index 1e403119131a7704a1f36ca2fd597d9ee64b9319..4fb0f3fde6be1ea16cd9d1a0359a848daed99a41 100644
+--- a/src/db/sysdb_search.c
++++ b/src/db/sysdb_search.c
+@@ -510,28 +510,33 @@ int sysdb_getgrnam_with_views(TALLOC_CTX *mem_ctx,
+ 
+     /* If there are views we have to check if override values must be added to
+      * the original object. */
+-    if (DOM_HAS_VIEWS(domain) && orig_obj->count == 1) {
+-        if (!is_local_view(domain->view_name)) {
+-            el = ldb_msg_find_element(orig_obj->msgs[0], SYSDB_GHOST);
+-            if (el != NULL && el->num_values != 0) {
+-                DEBUG(SSSDBG_TRACE_ALL, "Group object [%s], contains ghost "
+-                      "entries which must be resolved before overrides can be "
+-                      "applied.\n",
+-                      ldb_dn_get_linearized(orig_obj->msgs[0]->dn));
+-                ret = ENOENT;
++    if (orig_obj->count == 1) {
++        if (DOM_HAS_VIEWS(domain)) {
++            if (!is_local_view(domain->view_name)) {
++                el = ldb_msg_find_element(orig_obj->msgs[0], SYSDB_GHOST);
++                if (el != NULL && el->num_values != 0) {
++                    DEBUG(SSSDBG_TRACE_ALL, "Group object [%s], contains ghost "
++                          "entries which must be resolved before overrides can be "
++                          "applied.\n",
++                          ldb_dn_get_linearized(orig_obj->msgs[0]->dn));
++                    ret = ENOENT;
++                    goto done;
++                }
++            }
++
++            ret = sysdb_add_overrides_to_object(domain, orig_obj->msgs[0],
++                           override_obj == NULL ? NULL : override_obj ->msgs[0],
++                           NULL);
++            if (ret != EOK) {
++                DEBUG(SSSDBG_OP_FAILURE, "sysdb_add_overrides_to_object failed.\n");
+                 goto done;
+             }
+         }
+ 
+-        ret = sysdb_add_overrides_to_object(domain, orig_obj->msgs[0],
+-                          override_obj == NULL ? NULL : override_obj ->msgs[0],
+-                          NULL);
+-        if (ret != EOK) {
+-            DEBUG(SSSDBG_OP_FAILURE, "sysdb_add_overrides_to_object failed.\n");
+-            goto done;
+-        }
+-
+-        ret = sysdb_add_group_member_overrides(domain, orig_obj->msgs[0]);
++        /* Must be called even without views to check to
++         * SYSDB_DEFAULT_OVERRIDE_NAME */
++        ret = sysdb_add_group_member_overrides(domain, orig_obj->msgs[0],
++                                               DOM_HAS_VIEWS(domain));
+         if (ret != EOK) {
+             DEBUG(SSSDBG_OP_FAILURE,
+                   "sysdb_add_group_member_overrides failed.\n");
+@@ -664,28 +669,33 @@ int sysdb_getgrgid_with_views(TALLOC_CTX *mem_ctx,
+ 
+     /* If there are views we have to check if override values must be added to
+      * the original object. */
+-    if (DOM_HAS_VIEWS(domain) && orig_obj->count == 1) {
+-        if (!is_local_view(domain->view_name)) {
+-            el = ldb_msg_find_element(orig_obj->msgs[0], SYSDB_GHOST);
+-            if (el != NULL && el->num_values != 0) {
+-                DEBUG(SSSDBG_TRACE_ALL, "Group object [%s], contains ghost "
+-                      "entries which must be resolved before overrides can be "
+-                      "applied.\n",
+-                      ldb_dn_get_linearized(orig_obj->msgs[0]->dn));
+-                ret = ENOENT;
++    if (orig_obj->count == 1) {
++        if (DOM_HAS_VIEWS(domain)) {
++            if (!is_local_view(domain->view_name)) {
++                el = ldb_msg_find_element(orig_obj->msgs[0], SYSDB_GHOST);
++                if (el != NULL && el->num_values != 0) {
++                    DEBUG(SSSDBG_TRACE_ALL, "Group object [%s], contains ghost "
++                          "entries which must be resolved before overrides can be "
++                          "applied.\n",
++                          ldb_dn_get_linearized(orig_obj->msgs[0]->dn));
++                    ret = ENOENT;
++                    goto done;
++                }
++            }
++
++            ret = sysdb_add_overrides_to_object(domain, orig_obj->msgs[0],
++                              override_obj == NULL ? NULL : override_obj ->msgs[0],
++                              NULL);
++            if (ret != EOK) {
++                DEBUG(SSSDBG_OP_FAILURE, "sysdb_add_overrides_to_object failed.\n");
+                 goto done;
+             }
+         }
+ 
+-        ret = sysdb_add_overrides_to_object(domain, orig_obj->msgs[0],
+-                          override_obj == NULL ? NULL : override_obj ->msgs[0],
+-                          NULL);
+-        if (ret != EOK) {
+-            DEBUG(SSSDBG_OP_FAILURE, "sysdb_add_overrides_to_object failed.\n");
+-            goto done;
+-        }
+-
+-        ret = sysdb_add_group_member_overrides(domain, orig_obj->msgs[0]);
++        /* Must be called even without views to check to
++         * SYSDB_DEFAULT_OVERRIDE_NAME */
++        ret = sysdb_add_group_member_overrides(domain, orig_obj->msgs[0],
++                                               DOM_HAS_VIEWS(domain));
+         if (ret != EOK) {
+             DEBUG(SSSDBG_OP_FAILURE,
+                   "sysdb_add_group_member_overrides failed.\n");
+@@ -851,8 +861,8 @@ int sysdb_enumgrent_filter_with_views(TALLOC_CTX *mem_ctx,
+         goto done;
+     }
+ 
+-    if (DOM_HAS_VIEWS(domain)) {
+-        for (c = 0; c < res->count; c++) {
++    for (c = 0; c < res->count; c++) {
++        if (DOM_HAS_VIEWS(domain)) {
+             ret = sysdb_add_overrides_to_object(domain, res->msgs[c], NULL,
+                                                 NULL);
+             /* enumeration assumes that the cache is up-to-date, hence we do not
+@@ -861,13 +871,14 @@ int sysdb_enumgrent_filter_with_views(TALLOC_CTX *mem_ctx,
+                 DEBUG(SSSDBG_OP_FAILURE, "sysdb_add_overrides_to_object failed.\n");
+                 goto done;
+             }
++        }
+ 
+-            ret = sysdb_add_group_member_overrides(domain, res->msgs[c]);
+-            if (ret != EOK) {
+-                DEBUG(SSSDBG_OP_FAILURE,
+-                      "sysdb_add_group_member_overrides failed.\n");
+-                goto done;
+-            }
++        ret = sysdb_add_group_member_overrides(domain, res->msgs[c],
++                                               DOM_HAS_VIEWS(domain));
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE,
++                  "sysdb_add_group_member_overrides failed.\n");
++            goto done;
+         }
+     }
+ 
+diff --git a/src/db/sysdb_views.c b/src/db/sysdb_views.c
+index f0459fc174b94d7a735b7c416555eb5aaac42b7c..284f21f5b46ce4e27af0253752b00915048c0ef5 100644
+--- a/src/db/sysdb_views.c
++++ b/src/db/sysdb_views.c
+@@ -1273,14 +1273,13 @@ done:
+ }
+ 
+ errno_t sysdb_add_group_member_overrides(struct sss_domain_info *domain,
+-                                         struct ldb_message *obj)
++                                         struct ldb_message *obj,
++                                         bool expect_override_dn)
+ {
+     int ret;
+     size_t c;
+-    struct ldb_message_element *members;
++    struct ldb_result *res_members;
+     TALLOC_CTX *tmp_ctx;
+-    struct ldb_dn *member_dn;
+-    struct ldb_result *member_obj;
+     struct ldb_result *override_obj;
+     static const char *member_attrs[] = SYSDB_PW_ATTRS;
+     const char *override_dn_str;
+@@ -1291,12 +1290,6 @@ errno_t sysdb_add_group_member_overrides(struct sss_domain_info *domain,
+     char *val;
+     struct sss_domain_info *orig_dom;
+ 
+-    members = ldb_msg_find_element(obj, SYSDB_MEMBER);
+-    if (members == NULL || members->num_values == 0) {
+-        DEBUG(SSSDBG_TRACE_ALL, "Group has no members.\n");
+-        return EOK;
+-    }
+-
+     tmp_ctx = talloc_new(NULL);
+     if (tmp_ctx == NULL) {
+         DEBUG(SSSDBG_OP_FAILURE, "talloc_new failed.\n");
+@@ -1304,38 +1297,30 @@ errno_t sysdb_add_group_member_overrides(struct sss_domain_info *domain,
+         goto done;
+     }
+ 
+-    for (c = 0; c < members->num_values; c++) {
+-        member_dn = ldb_dn_from_ldb_val(tmp_ctx, domain->sysdb->ldb,
+-                                        &members->values[c]);
+-        if (member_dn == NULL) {
+-            DEBUG(SSSDBG_OP_FAILURE, "ldb_dn_from_ldb_val failed.\n");
+-            ret = ENOMEM;
+-            goto done;
+-        }
++    ret = sysdb_get_user_members_recursively(tmp_ctx, domain, obj->dn,
++                                             &res_members);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE,
++              "sysdb_get_user_members_recursively failed.\n");
++        goto done;
++    }
+ 
+-        ret = ldb_search(domain->sysdb->ldb, member_dn, &member_obj, member_dn,
+-                         LDB_SCOPE_BASE, member_attrs, NULL);
+-        if (ret != LDB_SUCCESS) {
+-            ret = sysdb_error_to_errno(ret);
+-            goto done;
+-        }
++    for (c = 0; c < res_members->count; c++) {
+ 
+-        if (member_obj->count != 1) {
+-            DEBUG(SSSDBG_CRIT_FAILURE,
+-                  "Base search for member object returned [%d] results.\n",
+-                  member_obj->count);
+-            ret = EINVAL;
+-            goto done;
+-        }
+-
+-        if (ldb_msg_find_attr_as_uint64(member_obj->msgs[0],
++        if (ldb_msg_find_attr_as_uint64(res_members->msgs[c],
+                                         SYSDB_UIDNUM, 0) == 0) {
+             /* Skip non-POSIX-user members i.e. groups and non-POSIX users */
+             continue;
+         }
+ 
+-        override_dn_str = ldb_msg_find_attr_as_string(member_obj->msgs[0],
+-                                                      SYSDB_OVERRIDE_DN, NULL);
++        if (expect_override_dn) {
++            override_dn_str = ldb_msg_find_attr_as_string(res_members->msgs[c],
++                                                          SYSDB_OVERRIDE_DN,
++                                                          NULL);
++        } else {
++            override_dn_str = ldb_dn_get_linearized(res_members->msgs[c]->dn);
++        }
++
+         if (override_dn_str == NULL) {
+             if (is_local_view(domain->view_name)) {
+                 /* LOCAL view doesn't have to have overrideDN specified. */
+@@ -1345,12 +1330,12 @@ errno_t sysdb_add_group_member_overrides(struct sss_domain_info *domain,
+ 
+             DEBUG(SSSDBG_CRIT_FAILURE,
+                   "Missing override DN for object [%s].\n",
+-                  ldb_dn_get_linearized(member_obj->msgs[0]->dn));
++                  ldb_dn_get_linearized(res_members->msgs[c]->dn));
+             ret = ENOENT;
+             goto done;
+         }
+ 
+-        override_dn = ldb_dn_new(member_obj, domain->sysdb->ldb,
++        override_dn = ldb_dn_new(res_members, domain->sysdb->ldb,
+                                  override_dn_str);
+         if (override_dn == NULL) {
+             DEBUG(SSSDBG_OP_FAILURE, "ldb_dn_new failed.\n");
+@@ -1358,22 +1343,27 @@ errno_t sysdb_add_group_member_overrides(struct sss_domain_info *domain,
+             goto done;
+         }
+ 
+-        orig_name = ldb_msg_find_attr_as_string(member_obj->msgs[0],
++        orig_name = ldb_msg_find_attr_as_string(res_members->msgs[c],
+                                                 SYSDB_NAME,
+                                                 NULL);
+         if (orig_name == NULL) {
+             DEBUG(SSSDBG_CRIT_FAILURE, "Object [%s] has no name.\n",
+-                  ldb_dn_get_linearized(member_obj->msgs[0]->dn));
++                  ldb_dn_get_linearized(res_members->msgs[c]->dn));
+             ret = EINVAL;
+             goto done;
+         }
+ 
+-        memberuid = NULL;
+-        if (ldb_dn_compare(member_obj->msgs[0]->dn, override_dn) != 0) {
++        /* start with default view name, if it exists or use NULL */
++        memberuid = ldb_msg_find_attr_as_string(res_members->msgs[c],
++                                                SYSDB_DEFAULT_OVERRIDE_NAME,
++                                                NULL);
++
++        /* If there is an override object, check if the name is overridden */
++        if (ldb_dn_compare(res_members->msgs[c]->dn, override_dn) != 0) {
+             DEBUG(SSSDBG_TRACE_ALL, "Checking override for object [%s].\n",
+-                  ldb_dn_get_linearized(member_obj->msgs[0]->dn));
++                  ldb_dn_get_linearized(res_members->msgs[c]->dn));
+ 
+-            ret = ldb_search(domain->sysdb->ldb, member_obj, &override_obj,
++            ret = ldb_search(domain->sysdb->ldb, res_members, &override_obj,
+                              override_dn, LDB_SCOPE_BASE, member_attrs, NULL);
+             if (ret != LDB_SUCCESS) {
+                 ret = sysdb_error_to_errno(ret);
+@@ -1383,43 +1373,43 @@ errno_t sysdb_add_group_member_overrides(struct sss_domain_info *domain,
+             if (override_obj->count != 1) {
+                 DEBUG(SSSDBG_CRIT_FAILURE,
+                      "Base search for override object returned [%d] results.\n",
+-                     member_obj->count);
++                    override_obj->count);
+                 ret = EINVAL;
+                 goto done;
+             }
+ 
+             memberuid = ldb_msg_find_attr_as_string(override_obj->msgs[0],
+                                                     SYSDB_NAME,
+-                                                    NULL);
++                                                    memberuid);
++        }
+ 
+-            if (memberuid != NULL) {
+-                ret = sss_parse_name(tmp_ctx, domain->names, orig_name,
+-                                     &orig_domain, NULL);
+-                if (ret != EOK) {
+-                    DEBUG(SSSDBG_OP_FAILURE,
+-                         "sss_parse_name failed to split original name [%s].\n",
+-                         orig_name);
++        if (memberuid != NULL) {
++            ret = sss_parse_name(tmp_ctx, domain->names, orig_name,
++                                 &orig_domain, NULL);
++            if (ret != EOK) {
++                DEBUG(SSSDBG_OP_FAILURE,
++                     "sss_parse_name failed to split original name [%s].\n",
++                     orig_name);
++                goto done;
++            }
++
++            if (orig_domain != NULL) {
++                orig_dom = find_domain_by_name(get_domains_head(domain),
++                                               orig_domain, true);
++                if (orig_dom == NULL) {
++                    DEBUG(SSSDBG_CRIT_FAILURE,
++                          "Cannot find domain with name [%s].\n",
++                          orig_domain);
++                    ret = EINVAL;
+                     goto done;
+                 }
+-
+-                if (orig_domain != NULL) {
+-                    orig_dom = find_domain_by_name(get_domains_head(domain),
+-                                                   orig_domain, true);
+-                    if (orig_dom == NULL) {
+-                        DEBUG(SSSDBG_CRIT_FAILURE,
+-                              "Cannot find domain with name [%s].\n",
+-                              orig_domain);
+-                        ret = EINVAL;
+-                        goto done;
+-                    }
+-                    memberuid = sss_get_domain_name(tmp_ctx, memberuid,
+-                                                    orig_dom);
+-                    if (memberuid == NULL) {
+-                        DEBUG(SSSDBG_OP_FAILURE,
+-                              "sss_get_domain_name failed.\n");
+-                        ret = ENOMEM;
+-                        goto done;
+-                    }
++                memberuid = sss_get_domain_name(tmp_ctx, memberuid,
++                                                orig_dom);
++                if (memberuid == NULL) {
++                    DEBUG(SSSDBG_OP_FAILURE,
++                          "sss_get_domain_name failed.\n");
++                    ret = ENOMEM;
++                    goto done;
+                 }
+             }
+         }
+@@ -1446,9 +1436,6 @@ errno_t sysdb_add_group_member_overrides(struct sss_domain_info *domain,
+         DEBUG(SSSDBG_TRACE_ALL, "Added [%s] to [%s].\n", memberuid,
+                                 OVERRIDE_PREFIX SYSDB_MEMBERUID);
+ 
+-        /* Free all temporary data of the current member to avoid memory usage
+-         * spikes. All temporary data should be allocated below member_dn. */
+-        talloc_free(member_dn);
+     }
+ 
+     ret = EOK;
+diff --git a/src/responder/nss/nsssrv_cmd.c b/src/responder/nss/nsssrv_cmd.c
+index c6f8284571be382dad5dfda651a25e4df6a14cb1..75f6a3a047977f196c4eb10b562e4609f0a7deff 100644
+--- a/src/responder/nss/nsssrv_cmd.c
++++ b/src/responder/nss/nsssrv_cmd.c
+@@ -3070,7 +3070,12 @@ static int fill_grent(struct sss_packet *packet,
+ 
+         memnum = 0;
+         if (!dom->ignore_group_members) {
+-            el = sss_view_ldb_msg_find_element(dom, msg, SYSDB_MEMBERUID);
++            /* unconditionally prefer OVERRIDE_PREFIX SYSDB_MEMBERUID, it
++             * might contain override names from the default view */
++            el = ldb_msg_find_element(msg, OVERRIDE_PREFIX SYSDB_MEMBERUID);
++            if (el == NULL) {
++                el = ldb_msg_find_element(msg, SYSDB_MEMBERUID);
++            }
+             if (el) {
+                 ret = fill_members(packet, dom, nctx, el, &rzero, &rsize,
+                                    &memnum);
+diff --git a/src/tests/cmocka/test_nss_srv.c b/src/tests/cmocka/test_nss_srv.c
+index 6bfbd574a4bb73f932d7ce7e0275769e4c43aa24..072a15a9ed4c54402340798da618a63e30587046 100644
+--- a/src/tests/cmocka/test_nss_srv.c
++++ b/src/tests/cmocka/test_nss_srv.c
+@@ -1128,6 +1128,43 @@ void test_nss_getgrnam_no_members(void **state)
+     assert_int_equal(ret, EOK);
+ }
+ 
++struct passwd testmember1 = {
++    .pw_name = discard_const("testmember1"),
++    .pw_uid = 2001,
++    .pw_gid = 456,
++    .pw_dir = discard_const("/home/testmember1"),
++    .pw_gecos = discard_const("test member1"),
++    .pw_shell = discard_const("/bin/sh"),
++    .pw_passwd = discard_const("*"),
++};
++
++struct passwd testmember2 = {
++    .pw_name = discard_const("testmember2"),
++    .pw_uid = 2002,
++    .pw_gid = 456,
++    .pw_dir = discard_const("/home/testmember2"),
++    .pw_gecos = discard_const("test member2"),
++    .pw_shell = discard_const("/bin/sh"),
++    .pw_passwd = discard_const("*"),
++};
++
++struct passwd submember1 = {
++    .pw_name = discard_const("submember1"),
++    .pw_uid = 4001,
++    .pw_gid = 456,
++    .pw_dir = discard_const("/home/submember1"),
++    .pw_gecos = discard_const("sub member1"),
++    .pw_shell = discard_const("/bin/sh"),
++    .pw_passwd = discard_const("*"),
++};
++
++struct group testgroup_members = {
++    .gr_gid = 1124,
++    .gr_name = discard_const("testgroup_members"),
++    .gr_passwd = discard_const("*"),
++    .gr_mem = NULL,
++};
++
+ static int test_nss_getgrnam_members_check(uint32_t status,
+                                            uint8_t *body, size_t blen)
+ {
+@@ -1361,6 +1398,16 @@ static int test_nss_getgrnam_check_mix_dom(uint32_t status,
+         .gr_passwd = discard_const("*"),
+         .gr_mem = discard_const(exp_members)
+     };
++    TALLOC_CTX *tmp_ctx;
++
++    tmp_ctx = talloc_new(nss_test_ctx);
++    assert_non_null(tmp_ctx);
++
++    exp_members[0] = sss_tc_fqname(tmp_ctx, nss_test_ctx->subdom->names,
++                                   nss_test_ctx->subdom, submember1.pw_name);
++    assert_non_null(exp_members[0]);
++    exp_members[1] = testmember1.pw_name;
++    exp_members[2] = testmember2.pw_name;
+ 
+     assert_int_equal(status, EOK);
+ 
+@@ -1423,6 +1470,26 @@ static int test_nss_getgrnam_check_mix_dom_fqdn(uint32_t status,
+         .gr_passwd = discard_const("*"),
+         .gr_mem = discard_const(exp_members)
+     };
++    TALLOC_CTX *tmp_ctx;
++
++    tmp_ctx = talloc_new(nss_test_ctx);
++    assert_non_null(tmp_ctx);
++
++    exp_members[0] = sss_tc_fqname(tmp_ctx, nss_test_ctx->subdom->names,
++                                   nss_test_ctx->subdom, submember1.pw_name);
++    assert_non_null(exp_members[0]);
++    exp_members[1] = sss_tc_fqname(tmp_ctx, nss_test_ctx->tctx->dom->names,
++                                   nss_test_ctx->tctx->dom, testmember1.pw_name);
++    assert_non_null(exp_members[1]);
++    exp_members[2] = sss_tc_fqname(tmp_ctx, nss_test_ctx->tctx->dom->names,
++                                   nss_test_ctx->tctx->dom, testmember2.pw_name);
++    assert_non_null(exp_members[2]);
++
++    expected.gr_name = sss_tc_fqname(tmp_ctx,
++                                     nss_test_ctx->tctx->dom->names,
++                                     nss_test_ctx->tctx->dom,
++                                     testgroup_members.gr_name);
++    assert_non_null(expected.gr_name);
+ 
+     assert_int_equal(status, EOK);
+ 
+-- 
+2.7.4
+

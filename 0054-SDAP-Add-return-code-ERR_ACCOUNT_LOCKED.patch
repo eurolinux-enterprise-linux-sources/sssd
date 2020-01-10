@@ -1,0 +1,63 @@
+From 6372bef74da1712e2bb82fb3c1b6cecdd6e7be36 Mon Sep 17 00:00:00 2001
+From: Pavel Reichl <preichl@redhat.com>
+Date: Fri, 5 Feb 2016 07:27:38 -0500
+Subject: [PATCH 54/56] SDAP: Add return code ERR_ACCOUNT_LOCKED
+
+Add code to distinquish state when account is locked in Active
+Directory server.
+
+Tested against Windows Server 2012
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/2839
+---
+ src/providers/data_provider.h              | 2 ++
+ src/providers/ldap/ldap_auth.c             | 4 ++++
+ src/providers/ldap/sdap_async_connection.c | 3 +++
+ 3 files changed, 9 insertions(+)
+
+diff --git a/src/providers/data_provider.h b/src/providers/data_provider.h
+index 39051b90c3aad96f62dcbb86a20bcfd8c954879b..7332b677d19f70f4736e4d0b68d55cdd3c67a4af 100644
+--- a/src/providers/data_provider.h
++++ b/src/providers/data_provider.h
+@@ -182,6 +182,8 @@ struct pam_data {
+     bool offline_auth;
+     bool last_auth_saved;
+     int priv;
++    int account_locked;
++
+ #ifdef USE_KEYRING
+     key_serial_t key_serial;
+ #endif
+diff --git a/src/providers/ldap/ldap_auth.c b/src/providers/ldap/ldap_auth.c
+index 217e80fd07abc41f2594d19397783683d44600cd..2fab92e5d22a4dae870c5e9dde7ef162fc36cbe2 100644
+--- a/src/providers/ldap/ldap_auth.c
++++ b/src/providers/ldap/ldap_auth.c
+@@ -1302,6 +1302,10 @@ static void sdap_pam_auth_done(struct tevent_req *req)
+     case ERR_PASSWORD_EXPIRED:
+         state->pd->pam_status = PAM_NEW_AUTHTOK_REQD;
+         break;
++    case ERR_ACCOUNT_LOCKED:
++        state->pd->account_locked = true;
++        state->pd->pam_status = PAM_PERM_DENIED;
++        break;
+     default:
+         state->pd->pam_status = PAM_SYSTEM_ERR;
+         dp_err = DP_ERR_FATAL;
+diff --git a/src/providers/ldap/sdap_async_connection.c b/src/providers/ldap/sdap_async_connection.c
+index 85b7aaa5bf5acedf3511ffe6f8636be007d5a136..b3ecf2c8f1aa76239fbad0b14e5521c8cb6865bf 100644
+--- a/src/providers/ldap/sdap_async_connection.c
++++ b/src/providers/ldap/sdap_async_connection.c
+@@ -754,6 +754,9 @@ static void simple_bind_done(struct sdap_op *op,
+ 
+     if (result == LDAP_SUCCESS) {
+         ret = EOK;
++    } else if (result == LDAP_INVALID_CREDENTIALS
++                   && errmsg != NULL && strstr(errmsg, "data 775,") != NULL) {
++        ret = ERR_ACCOUNT_LOCKED;
+     } else {
+         ret = ERR_AUTH_FAILED;
+     }
+-- 
+2.4.3
+

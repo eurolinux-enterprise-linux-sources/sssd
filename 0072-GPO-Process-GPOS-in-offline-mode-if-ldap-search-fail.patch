@@ -1,0 +1,59 @@
+From 7fc9189958d016be5d3d1c165cedc09a9b3b4704 Mon Sep 17 00:00:00 2001
+From: Lukas Slebodnik <lslebodn@redhat.com>
+Date: Mon, 11 Apr 2016 12:31:05 +0200
+Subject: [PATCH 72/74] GPO: Process GPOS in offline mode if ldap search failed
+
+Initgroup requests use global catalog for LDAP queries.
+Only port for global catalog is marked as offline
+if request fails due to problems with connection.
+However, GPO code uses standard LDAP port for
+retrieving of target DNs and other information.
+
+Previously, GPOs were processed in offline mode only
+if there were issues with connection to AD server.
+But connection can be cached and ldap search can still fail.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/2964
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit bdd533146cb2da71b7c39ad0efa2e5baca7257eb)
+(cherry picked from commit 33973418462b75592122343e318045a6905c475b)
+---
+ src/providers/ad/ad_gpo.c | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/src/providers/ad/ad_gpo.c b/src/providers/ad/ad_gpo.c
+index 5969e8442449ec410b4aa6a043f686349b9f2e7b..a169a40589f4d95cb31b2d8e9a302d2f155848c9 100644
+--- a/src/providers/ad/ad_gpo.c
++++ b/src/providers/ad/ad_gpo.c
+@@ -1794,6 +1794,26 @@ ad_gpo_target_dn_retrieval_done(struct tevent_req *subreq)
+     talloc_zfree(subreq);
+     if (ret != EOK) {
+         ret = sdap_id_op_done(state->sdap_op, ret, &dp_error);
++        if (ret == EAGAIN && dp_error == DP_ERR_OFFLINE) {
++            DEBUG(SSSDBG_TRACE_FUNC, "Preparing for offline operation.\n");
++            ret = process_offline_gpos(state,
++                                       state->user,
++                                       state->gpo_mode,
++                                       state->user_domain,
++                                       state->host_domain,
++                                       state->gpo_map_type);
++
++            if (ret == EOK) {
++                DEBUG(SSSDBG_TRACE_FUNC, "process_offline_gpos succeeded\n");
++                tevent_req_done(req);
++                goto done;
++            } else {
++                DEBUG(SSSDBG_OP_FAILURE,
++                      "process_offline_gpos failed [%d](%s)\n",
++                      ret, sss_strerror(ret));
++                goto done;
++            }
++        }
+ 
+         DEBUG(SSSDBG_OP_FAILURE,
+               "Unable to get policy target's DN: [%d](%s)\n",
+-- 
+2.7.4
+

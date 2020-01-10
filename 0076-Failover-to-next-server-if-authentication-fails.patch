@@ -1,0 +1,29 @@
+From 6b7e148d98de0f29f0ba027de3326aa02fc5e982 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pavel=20B=C5=99ezina?= <pbrezina@redhat.com>
+Date: Wed, 6 Apr 2016 13:21:21 +0200
+Subject: [PATCH 76/77] Failover to next server if authentication fails
+
+Resolves:
+    https://fedorahosted.org/sssd/ticket/3010
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 73dd89c3fb361dab43b4802510f4c64d282dbde1)
+---
+ src/providers/ldap/sdap_id_op.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/providers/ldap/sdap_id_op.c b/src/providers/ldap/sdap_id_op.c
+index 0474a9cb7828ef43ef76cf6bebac077315296875..f3fc400dc552ddb7861b32f6d593299fdc70e1ab 100644
+--- a/src/providers/ldap/sdap_id_op.c
++++ b/src/providers/ldap/sdap_id_op.c
+@@ -604,6 +604,7 @@ static void sdap_id_op_connect_done(struct tevent_req *subreq)
+             case EIO:
+             case EFAULT:
+             case ETIMEDOUT:
++            case ERR_AUTH_FAILED:
+                 break;
+ 
+             default:
+-- 
+2.7.4
+

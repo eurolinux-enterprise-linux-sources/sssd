@@ -1,0 +1,70 @@
+From 10e5efd6750b663e99dce41414461ecb20caa822 Mon Sep 17 00:00:00 2001
+From: Lukas Slebodnik <lslebodn@redhat.com>
+Date: Tue, 2 Aug 2016 15:20:19 +0200
+Subject: [PATCH 109/110] SYSDB: Sanitize dn in
+ sysdb_get_user_members_recursively
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+There was a crash in nss responder when a group contained
+a user with special charactes which shoudl be sanitized before
+using in filter.
+
+==31651== Conditional jump or move depends on uninitialised value(s)
+==31651==    at 0x8BEA7DE: _talloc_steal_loc (talloc.c:1215)
+==31651==    by 0x5264889: sysdb_get_user_members_recursively (sysdb_ops.c:4759)
+==31651==    by 0x5278F61: sysdb_add_group_member_overrides (sysdb_views.c:1375)
+==31651==    by 0x526677C: sysdb_getgrnam_with_views (sysdb_search.c:799)
+==31651==    by 0x1172F6: nss_cmd_getgrnam_search (nsssrv_cmd.c:3168)
+==31651==    by 0x119C67: nss_cmd_getby_dp_callback (nsssrv_cmd.c:1382)
+==31651==    by 0x10FD14: nsssrv_dp_send_acct_req_done (nsssrv_cmd.c:916)
+==31651==    by 0x12898B: sss_dp_internal_get_done (responder_dp.c:791)
+==31651==    by 0x58FF861: complete_pending_call_and_unlock (dbus-connection.c:2314)
+==31651==    by 0x5902B50: dbus_connection_dispatch (dbus-connection.c:4580)
+==31651==    by 0x527F261: sbus_dispatch (sssd_dbus_connection.c:96)
+==31651==    by 0x89D8B4E: tevent_common_loop_timer_delay (tevent_timed.c:341)
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3121
+
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit 31fdda9759a8a03081b5ab6307a5e8ce4cbe50d2)
+---
+ src/db/sysdb_ops.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/src/db/sysdb_ops.c b/src/db/sysdb_ops.c
+index f58a426014345cec023964ad61b2126f508a1c2b..8756ffee164335aea5d5aa6258ccf7406faee47e 100644
+--- a/src/db/sysdb_ops.c
++++ b/src/db/sysdb_ops.c
+@@ -3903,6 +3903,7 @@ errno_t sysdb_get_user_members_recursively(TALLOC_CTX *mem_ctx,
+     struct ldb_result *res;
+     struct ldb_dn *base_dn;
+     char *filter;
++    char *sanitized_name;
+     const char *attrs[] = SYSDB_PW_ATTRS;
+     struct ldb_message **msgs;
+ 
+@@ -3918,8 +3919,17 @@ errno_t sysdb_get_user_members_recursively(TALLOC_CTX *mem_ctx,
+         goto done;
+     }
+ 
++    ret = sss_filter_sanitize(tmp_ctx, ldb_dn_get_linearized(group_dn),
++                              &sanitized_name);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "Failed to sanitize the given name:'%s'.\n",
++              ldb_dn_get_linearized(group_dn));
++        goto done;
++    }
++
+     filter = talloc_asprintf(tmp_ctx, "(&("SYSDB_UC")("SYSDB_MEMBEROF"=%s))",
+-                             ldb_dn_get_linearized(group_dn));
++                             sanitized_name);
+     if (filter == NULL) {
+         DEBUG(SSSDBG_OP_FAILURE, "talloc_asprintf failed.\n");
+         ret = ENOMEM;
+-- 
+2.7.4
+

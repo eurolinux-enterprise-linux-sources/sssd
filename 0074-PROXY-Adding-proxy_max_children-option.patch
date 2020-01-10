@@ -1,0 +1,140 @@
+From 15d3d5b561e6decbfc448adfe36cfe197fe0818b Mon Sep 17 00:00:00 2001
+From: Petr Cech <pcech@redhat.com>
+Date: Wed, 24 Aug 2016 14:41:09 +0200
+Subject: [PATCH 74/74] PROXY: Adding proxy_max_children option
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The new option 'proxy_max_children' is applicable
+in domain section. Default value is 10.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3153
+
+Reviewed-by: Fabiano Fidêncio <fidencio@redhat.com>
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit aef0171e0bdc9a683958d69c7ee984fb10cd5de7)
+(cherry picked from commit 90c62a1b4bac450712bc5a194b793761329a1d3a)
+---
+ src/confdb/confdb.h                       |  1 +
+ src/config/SSSDConfig/__init__.py.in      |  3 +++
+ src/config/etc/sssd.api.d/sssd-proxy.conf |  1 +
+ src/man/sssd.conf.5.xml                   | 17 +++++++++++++++++
+ src/providers/proxy/proxy_init.c          | 22 ++++++++++++++++++++--
+ 5 files changed, 42 insertions(+), 2 deletions(-)
+
+diff --git a/src/confdb/confdb.h b/src/confdb/confdb.h
+index 6d8601b31cf4ce1a42f824a8400cef8c4ffadf9a..3161fc2181f9af641c3019adbdb67bcb417efdd8 100644
+--- a/src/confdb/confdb.h
++++ b/src/confdb/confdb.h
+@@ -215,6 +215,7 @@
+ #define CONFDB_PROXY_LIBNAME "proxy_lib_name"
+ #define CONFDB_PROXY_PAM_TARGET "proxy_pam_target"
+ #define CONFDB_PROXY_FAST_ALIAS "proxy_fast_alias"
++#define CONFDB_PROXY_MAX_CHILDREN "proxy_max_children"
+ 
+ struct confdb_ctx;
+ struct config_file_ctx;
+diff --git a/src/config/SSSDConfig/__init__.py.in b/src/config/SSSDConfig/__init__.py.in
+index 09284fdd7c8e630b3745367b33b8ea0424ff466f..189b9225f6374db3dfc253844e6239b39b8edb66 100644
+--- a/src/config/SSSDConfig/__init__.py.in
++++ b/src/config/SSSDConfig/__init__.py.in
+@@ -418,6 +418,9 @@ option_strings = {
+     'default_shell' : _('Default shell, /bin/bash'),
+     'base_directory' : _('Base for home directories'),
+ 
++    # [provider/proxy]
++    'proxy_max_children' : _('The number of preforked proxy children.'),
++
+     # [provider/proxy/id]
+     'proxy_lib_name' : _('The name of the NSS library to use'),
+     'proxy_fast_alias' : _('Whether to look up canonical group name from cache if possible'),
+diff --git a/src/config/etc/sssd.api.d/sssd-proxy.conf b/src/config/etc/sssd.api.d/sssd-proxy.conf
+index 89a6503f9b84b7eab5fb3b0dd591dea905b43adb..09bf82affcb4263de3abbb67d1d484f6b01a1824 100644
+--- a/src/config/etc/sssd.api.d/sssd-proxy.conf
++++ b/src/config/etc/sssd.api.d/sssd-proxy.conf
+@@ -1,4 +1,5 @@
+ [provider/proxy]
++proxy_max_children = int, None, false
+ 
+ [provider/proxy/id]
+ proxy_lib_name = str, None, true
+diff --git a/src/man/sssd.conf.5.xml b/src/man/sssd.conf.5.xml
+index d7e324f457a42403133c9d25f34d702d703fc9b8..37197add75e8847ea83b2f9f6a46fa0521182b93 100644
+--- a/src/man/sssd.conf.5.xml
++++ b/src/man/sssd.conf.5.xml
+@@ -2346,6 +2346,23 @@ pam_account_locked_message = Account locked, please call help desk.
+                         </para>
+                     </listitem>
+                 </varlistentry>
++
++                <varlistentry>
++                    <term>proxy_max_children (integer)</term>
++                    <listitem>
++                        <para>
++                            This option specifies the number of pre-forked
++                            proxy children. It is useful for high-load SSSD
++                            environments where sssd may run out of available
++                            child slots, which would cause some issues due to
++                            the requests being queued.
++                        </para>
++                        <para>
++                            Default: 10
++                        </para>
++                    </listitem>
++                </varlistentry>
++
+             </variablelist>
+         </para>
+ 
+diff --git a/src/providers/proxy/proxy_init.c b/src/providers/proxy/proxy_init.c
+index 0a6b11d4a3f102782322c913d280b26fe47aecab..23c340cbb7231d773de25874b05375b35a726979 100644
+--- a/src/providers/proxy/proxy_init.c
++++ b/src/providers/proxy/proxy_init.c
+@@ -27,6 +27,8 @@
+ #include "util/sss_format.h"
+ #include "providers/proxy/proxy.h"
+ 
++#define OPT_MAX_CHILDREN_DEFAULT 10
++
+ static int client_registration(struct sbus_request *dbus_req, void *data);
+ 
+ static struct data_provider_iface proxy_methods = {
+@@ -478,6 +480,7 @@ int sssm_proxy_auth_init(struct be_ctx *bectx,
+     int ret;
+     int hret;
+     char *sbus_address;
++    int max_children;
+ 
+     /* If we're already set up, just return that */
+     if(bectx->bet_info[BET_AUTH].mod_name &&
+@@ -523,8 +526,23 @@ int sssm_proxy_auth_init(struct be_ctx *bectx,
+     }
+ 
+     /* Set up request hash table */
+-    /* FIXME: get max_children from configuration file */
+-    ctx->max_children = 10;
++    ret = confdb_get_int(bectx->cdb, bectx->conf_path,
++                         CONFDB_PROXY_MAX_CHILDREN,
++                         OPT_MAX_CHILDREN_DEFAULT,
++                         &max_children);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "Unable to read confdb [%d]: %s\n", ret, sss_strerror(ret));
++        goto done;
++    }
++
++    if (max_children < 1) {
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "Option " CONFDB_PROXY_MAX_CHILDREN " must be higher then 0\n");
++        ret = EINVAL;
++        goto done;
++    }
++    ctx->max_children = max_children;
+ 
+     hret = hash_create(ctx->max_children * 2, &ctx->request_table,
+                        NULL, NULL);
+-- 
+2.7.4
+

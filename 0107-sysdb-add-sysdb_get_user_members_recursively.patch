@@ -1,0 +1,103 @@
+From df2d2bc15c552e803af6172aa48c2d06f72f22b9 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 20 Jul 2016 18:42:27 +0200
+Subject: [PATCH 107/110] sysdb: add sysdb_get_user_members_recursively()
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 17bfd9f69251781140e4b2b55ffeb649d7a79e86)
+---
+ src/db/sysdb.h     |  5 +++++
+ src/db/sysdb_ops.c | 61 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 66 insertions(+)
+
+diff --git a/src/db/sysdb.h b/src/db/sysdb.h
+index 5e9ebf6cba18c4921265e034f26d0f51bf4307da..1f4a5edb0375519a9a15d26fa2e272a386178930 100644
+--- a/src/db/sysdb.h
++++ b/src/db/sysdb.h
+@@ -1222,6 +1222,11 @@ errno_t sysdb_get_sids_of_members(TALLOC_CTX *mem_ctx,
+                                   const char ***_dns,
+                                   size_t *_n);
+ 
++errno_t sysdb_get_user_members_recursively(TALLOC_CTX *mem_ctx,
++                                           struct sss_domain_info *dom,
++                                           struct ldb_dn *group_dn,
++                                           struct ldb_result **members);
++
+ errno_t sysdb_handle_original_uuid(const char *orig_name,
+                                    struct sysdb_attrs *src_attrs,
+                                    const char *src_name,
+diff --git a/src/db/sysdb_ops.c b/src/db/sysdb_ops.c
+index 843251b3e87a697a0f9e8cb2bb2d83be0150a474..f58a426014345cec023964ad61b2126f508a1c2b 100644
+--- a/src/db/sysdb_ops.c
++++ b/src/db/sysdb_ops.c
+@@ -3892,6 +3892,67 @@ done:
+     return ret;
+ }
+ 
++errno_t sysdb_get_user_members_recursively(TALLOC_CTX *mem_ctx,
++                                           struct sss_domain_info *dom,
++                                           struct ldb_dn *group_dn,
++                                           struct ldb_result **members)
++{
++    TALLOC_CTX *tmp_ctx;
++    int ret;
++    size_t count;
++    struct ldb_result *res;
++    struct ldb_dn *base_dn;
++    char *filter;
++    const char *attrs[] = SYSDB_PW_ATTRS;
++    struct ldb_message **msgs;
++
++    tmp_ctx = talloc_new(NULL);
++    if (tmp_ctx == NULL) {
++        return ENOMEM;
++    }
++
++    base_dn = sysdb_base_dn(dom->sysdb, tmp_ctx);
++    if (base_dn == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "sysdb_base_dn failed.\n");
++        ret = ENOMEM;
++        goto done;
++    }
++
++    filter = talloc_asprintf(tmp_ctx, "(&("SYSDB_UC")("SYSDB_MEMBEROF"=%s))",
++                             ldb_dn_get_linearized(group_dn));
++    if (filter == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "talloc_asprintf failed.\n");
++        ret = ENOMEM;
++        goto done;
++    }
++
++    ret = sysdb_search_entry(tmp_ctx, dom->sysdb, base_dn, LDB_SCOPE_SUBTREE,
++                             filter, attrs, &count, &msgs);
++
++    res = talloc_zero(tmp_ctx, struct ldb_result);
++    if (res == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "talloc_zero failed.\n");
++        ret = ENOMEM;
++        goto done;
++    }
++
++    res->count = count;
++    res->msgs = talloc_steal(res, msgs);
++
++    ret = EOK;
++
++done:
++    if (ret == EOK) {
++        *members = talloc_steal(mem_ctx, res);
++    } else if (ret == ENOENT) {
++        DEBUG(SSSDBG_TRACE_FUNC, "No such entry\n");
++    } else {
++        DEBUG(SSSDBG_OP_FAILURE, "Error: %d (%s)\n", ret, strerror(ret));
++    }
++    talloc_free(tmp_ctx);
++    return ret;
++}
++
+ errno_t sysdb_handle_original_uuid(const char *orig_name,
+                                    struct sysdb_attrs *src_attrs,
+                                    const char *src_name,
+-- 
+2.7.4
+

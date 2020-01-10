@@ -1,0 +1,87 @@
+From 10f27599dca646553c3db86e6a30d53140bf0480 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Tue, 12 Jul 2016 17:09:00 +0200
+Subject: [PATCH 105/110] IPA: make ipa_resolve_user_list_{send|recv} public
+ and allow AD users
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit f2e8a7c3230fac11175c0bd17c14c66a8e9b25ad)
+---
+ src/providers/ipa/ipa_id.c | 21 ++++++++++++++++-----
+ src/providers/ipa/ipa_id.h |  9 +++++++++
+ 2 files changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/src/providers/ipa/ipa_id.c b/src/providers/ipa/ipa_id.c
+index 27cc2548d8802c81311c6c5bd10a0db4e8930fa1..2b8029adb3e49078c93d88614c8c77929845d81d 100644
+--- a/src/providers/ipa/ipa_id.c
++++ b/src/providers/ipa/ipa_id.c
+@@ -184,7 +184,7 @@ struct ipa_resolve_user_list_state {
+ static errno_t ipa_resolve_user_list_get_user_step(struct tevent_req *req);
+ static void ipa_resolve_user_list_get_user_done(struct tevent_req *subreq);
+ 
+-static struct tevent_req *
++struct tevent_req *
+ ipa_resolve_user_list_send(TALLOC_CTX *memctx, struct tevent_context *ev,
+                            struct be_req *be_req,
+                            struct ipa_id_ctx *ipa_ctx,
+@@ -247,8 +247,14 @@ static errno_t ipa_resolve_user_list_get_user_step(struct tevent_req *req)
+ 
+     DEBUG(SSSDBG_TRACE_ALL, "Trying to resolve user [%s].\n", ar->filter_value);
+ 
+-    subreq = ipa_id_get_account_info_send(state, state->ev, state->ipa_ctx,
+-                                          state->be_req, ar);
++    if (strcasecmp(state->domain_name,
++                   state->ipa_ctx->sdap_id_ctx->be->domain->name) != 0) {
++        subreq = ipa_subdomain_account_send(state, state->ev, state->ipa_ctx,
++                                            state->be_req, ar);
++    } else {
++        subreq = ipa_id_get_account_info_send(state, state->ev, state->ipa_ctx,
++                                              state->be_req, ar);
++    }
+     if (subreq == NULL) {
+         DEBUG(SSSDBG_OP_FAILURE, "sdap_handle_acct_req_send failed.\n");
+         return ENOMEM;
+@@ -267,7 +273,12 @@ static void ipa_resolve_user_list_get_user_done(struct tevent_req *subreq)
+                                             struct ipa_resolve_user_list_state);
+     int ret;
+ 
+-    ret = ipa_id_get_account_info_recv(subreq, &state->dp_error);
++    if (strcasecmp(state->domain_name,
++                   state->ipa_ctx->sdap_id_ctx->be->domain->name) != 0) {
++        ret = ipa_subdomain_account_recv(subreq, &state->dp_error);
++    } else {
++        ret = ipa_id_get_account_info_recv(subreq, &state->dp_error);
++    }
+     talloc_zfree(subreq);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_OP_FAILURE, "sdap_handle_acct request failed: %d\n", ret);
+@@ -298,7 +309,7 @@ done:
+     return;
+ }
+ 
+-static int ipa_resolve_user_list_recv(struct tevent_req *req, int *dp_error)
++int ipa_resolve_user_list_recv(struct tevent_req *req, int *dp_error)
+ {
+     struct ipa_resolve_user_list_state *state = tevent_req_data(req,
+                                             struct ipa_resolve_user_list_state);
+diff --git a/src/providers/ipa/ipa_id.h b/src/providers/ipa/ipa_id.h
+index 91a94115386955f63eca706bf6f4ac41884445eb..c9b56b3e19302c9ff8b384039c57b7dc8ed869f5 100644
+--- a/src/providers/ipa/ipa_id.h
++++ b/src/providers/ipa/ipa_id.h
+@@ -120,4 +120,13 @@ ipa_initgr_get_overrides_send(TALLOC_CTX *memctx,
+                              struct ldb_message **groups,
+                              const char *groups_id_attr);
+ int ipa_initgr_get_overrides_recv(struct tevent_req *req, int *dp_error);
++
++struct tevent_req *
++ipa_resolve_user_list_send(TALLOC_CTX *memctx, struct tevent_context *ev,
++                           struct be_req *be_req,
++                           struct ipa_id_ctx *ipa_ctx,
++                           const char *domain_name,
++                           struct ldb_message_element *users);
++int ipa_resolve_user_list_recv(struct tevent_req *req, int *dp_error);
++
+ #endif
+-- 
+2.7.4
+

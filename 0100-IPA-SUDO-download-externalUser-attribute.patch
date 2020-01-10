@@ -1,0 +1,85 @@
+From f421f621be9c7358d639923a67424e234acc55b7 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pavel=20B=C5=99ezina?= <pbrezina@redhat.com>
+Date: Tue, 1 Mar 2016 14:00:26 +0100
+Subject: [PATCH 100/102] IPA SUDO: download externalUser attribute
+
+This allows configuration with id_provider = proxy
+and sudo_provider = ipa when someone needs to fetch
+rules for local users.
+
+https://fedorahosted.org/sssd/ticket/2972
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 991c9f47fcb24704b880f60ab8ee77cfda056e2c)
+(cherry picked from commit d4d2ffa6cf967231ae725973ee2665dbd0e2391b)
+---
+ src/config/etc/sssd.api.d/sssd-ipa.conf | 1 +
+ src/db/sysdb_sudo.h                     | 1 +
+ src/providers/ipa/ipa_common.h          | 1 +
+ src/providers/ipa/ipa_opts.c            | 1 +
+ src/providers/ipa/ipa_sudo_conversion.c | 1 +
+ 5 files changed, 5 insertions(+)
+
+diff --git a/src/config/etc/sssd.api.d/sssd-ipa.conf b/src/config/etc/sssd.api.d/sssd-ipa.conf
+index 822599db6390ad2244a71db770c0b162345a3321..ca5aeda224649f2309c14bfda48a23c286832943 100644
+--- a/src/config/etc/sssd.api.d/sssd-ipa.conf
++++ b/src/config/etc/sssd.api.d/sssd-ipa.conf
+@@ -257,6 +257,7 @@ ipa_sudorule_runasgroupcategory = str, None, false
+ ipa_sudorule_runasextuser = str, None, false
+ ipa_sudorule_runasextgroup = str, None, false
+ ipa_sudorule_runasextusergroup = str, None, false
++ipa_sudorule_externaluser = str, None, false
+ ipa_sudorule_entry_usn = str, None, false
+ ipa_sudocmdgroup_object_class = str, None, false
+ ipa_sudocmdgroup_uuid = str, None, false
+diff --git a/src/db/sysdb_sudo.h b/src/db/sysdb_sudo.h
+index ba90a68512c6c29134ab2f746220db9533a93dda..515f45ab8b8f51cf7b1d27c1ba28ed8182bce6c0 100644
+--- a/src/db/sysdb_sudo.h
++++ b/src/db/sysdb_sudo.h
+@@ -68,6 +68,7 @@
+ #define SYSDB_IPA_SUDORULE_RUNASEXTUSER       "ipaSudoRunAsExtUser"
+ #define SYSDB_IPA_SUDORULE_RUNASEXTGROUP      "ipaSudoRunAsExtGroup"
+ #define SYSDB_IPA_SUDORULE_RUNASEXTUSERGROUP  "ipaSudoRunAsExtUserGroup"
++#define SYSDB_IPA_SUDORULE_EXTUSER            "externalUser"
+ 
+ #define SYSDB_IPA_SUDOCMDGROUP_OC                 "ipasudocmdgrp"
+ 
+diff --git a/src/providers/ipa/ipa_common.h b/src/providers/ipa/ipa_common.h
+index 24898ee3809b0bcb682321ba4cfa500acd7c795b..d1688bb6a226cd45318dd22380d0ff73d9b2ec47 100644
+--- a/src/providers/ipa/ipa_common.h
++++ b/src/providers/ipa/ipa_common.h
+@@ -156,6 +156,7 @@ enum ipa_sudorule_attrs {
+     IPA_AT_SUDORULE_RUNASEXTUSER,
+     IPA_AT_SUDORULE_RUNASEXTGROUP,
+     IPA_AT_SUDORULE_RUNASEXTUSERGROUP,
++    IPA_AT_SUDORULE_EXTUSER,
+     IPA_AT_SUDORULE_ENTRYUSN,
+ 
+     IPA_OPTS_SUDORULE
+diff --git a/src/providers/ipa/ipa_opts.c b/src/providers/ipa/ipa_opts.c
+index cd87852e5891fd43d7ec728f76860f3050a54d2f..99b057a02fb3c433cbbd8b55ca2a00e19b4243b5 100644
+--- a/src/providers/ipa/ipa_opts.c
++++ b/src/providers/ipa/ipa_opts.c
+@@ -360,6 +360,7 @@ struct sdap_attr_map ipa_sudorule_map[] = {
+     { "ipa_sudorule_runasextuser", "ipaSudoRunAsExtUser", SYSDB_IPA_SUDORULE_RUNASEXTUSER, NULL },
+     { "ipa_sudorule_runasextgroup", "ipaSudoRunAsExtGroup", SYSDB_IPA_SUDORULE_RUNASEXTGROUP, NULL },
+     { "ipa_sudorule_runasextusergroup", "ipaSudoRunAsExtUserGroup", SYSDB_IPA_SUDORULE_RUNASEXTUSERGROUP, NULL },
++    { "ipa_sudorule_externaluser", "externalUser", SYSDB_IPA_SUDORULE_EXTUSER, NULL },
+     { "ipa_sudorule_entry_usn", "entryUSN", SYSDB_USN, NULL },
+     SDAP_ATTR_MAP_TERMINATOR
+ };
+diff --git a/src/providers/ipa/ipa_sudo_conversion.c b/src/providers/ipa/ipa_sudo_conversion.c
+index e8c9627bac171834ad59e6a5118dc2f57d97eac0..278fee600369e3002cc177313c1ce9f6131c08f7 100644
+--- a/src/providers/ipa/ipa_sudo_conversion.c
++++ b/src/providers/ipa/ipa_sudo_conversion.c
+@@ -890,6 +890,7 @@ convert_attributes(struct ipa_sudo_conv *conv,
+                  {SYSDB_IPA_SUDORULE_RUNASEXTUSER,       SYSDB_SUDO_CACHE_AT_RUNASUSER  , NULL},
+                  {SYSDB_IPA_SUDORULE_RUNASEXTGROUP,      SYSDB_SUDO_CACHE_AT_RUNASGROUP , NULL},
+                  {SYSDB_IPA_SUDORULE_RUNASEXTUSERGROUP,  SYSDB_SUDO_CACHE_AT_RUNASUSER  , convert_runasextusergroup},
++                 {SYSDB_IPA_SUDORULE_EXTUSER,            SYSDB_SUDO_CACHE_AT_USER       , NULL},
+                  {SYSDB_IPA_SUDORULE_ALLOWCMD,           SYSDB_IPA_SUDORULE_ORIGCMD     , NULL},
+                  {SYSDB_IPA_SUDORULE_DENYCMD,            SYSDB_IPA_SUDORULE_ORIGCMD     , NULL},
+                  {NULL, NULL, NULL}};
+-- 
+2.7.4
+

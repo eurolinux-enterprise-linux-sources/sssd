@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE reference PUBLIC "-//OASIS//DTD DocBook V4.4//EN"
+"http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<reference>
+<title>SSSD-Handbuchseiten</title>
+<refentry>
+    <refentryinfo>
+<productname>SSSD</productname> <orgname>Die SSSD-Originalautoren –
+http://fedorahosted.org/sssd</orgname></refentryinfo>
+
+    <refmeta>
+        <refentrytitle>pam_sss</refentrytitle>
+        <manvolnum>8</manvolnum>
+    </refmeta>
+
+    <refnamediv id='name'>
+        <refname>pam_sss</refname>
+        <refpurpose>PAM-Modul für SSSD</refpurpose>
+    </refnamediv>
+
+    <refsynopsisdiv id='synopsis'>
+        <cmdsynopsis>
+<command>pam_sss.so</command> <arg choice='opt'>
+<replaceable>quiet</replaceable> </arg> <arg choice='opt'>
+<replaceable>forward_pass</replaceable> </arg> <arg choice='opt'>
+<replaceable>use_first_pass</replaceable> </arg> <arg choice='opt'>
+<replaceable>use_authtok</replaceable> </arg> <arg choice='opt'>
+<replaceable>retry=N</replaceable> </arg> <arg choice='opt'>
+<replaceable>ignore_unknown_user</replaceable> </arg> <arg choice='opt'>
+<replaceable>ignore_authinfo_unavail</replaceable> </arg> <arg choice='opt'>
+<replaceable>domains=X</replaceable> </arg></cmdsynopsis>
+    </refsynopsisdiv>
+
+    <refsect1 id='description'>
+        <title>BESCHREIBUNG</title>
+        <para><command>pam_sss.so</command> ist die PAM-Schnittstelle des
+Systemsicherheitsdienst-Daemons (»System Security Services
+daemon«/SSSD). Fehler und Ergebnisse werden durch
+<command>syslog(3)</command>  mit der Fertigkeit LOG_AUTHPRIV protokolliert.</para>
+    </refsect1>
+
+    <refsect1 id='options'>
+        <title>OPTIONEN</title>
+        <variablelist remap='IP'>
+            <varlistentry>
+                <term>
+                    <option>quiet</option>
+                </term>
+                <listitem>
+                    <para>unterdrückt Protokollnachrichten für unbekannte Benutzer</para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>forward_pass</option>
+                </term>
+                <listitem>
+                    <para>Falls <option>forward_pass</option> gesetzt ist, wird das eingegebene
+Passwort in den Stapelverabeitungsspeicher gelegt, damit andere PAM-Module
+es nutzen können.
+                    </para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>use_first_pass</option>
+                </term>
+                <listitem>
+                    <para>Das Argument »use_first_pass« zwingt das Modul ein vorher im
+Stapelverabeitungsspeicher abgelegtes Passwort zu benutzen. Es wird den
+Anwender nie fragen. Falls kein Passwort verfügbar oder das Passwort
+ungeeignet ist, wird dem Benutzer der Zugriff verwehrt.</para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>use_authtok</option>
+                </term>
+                <listitem>
+                    <para>Wenn das Passwort geändert wird, erzwingt das Modul, dass das neue Passwort
+von einem vorher im Stapelverabeitungsspeicher abgelegten Passwortmodul
+bereitgestellt wird.</para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>retry=N</option>
+                </term>
+                <listitem>
+                    <para>Ist dies angegeben, wird der Benutzer weitere N mal nach einem Passwort
+gefragt, falls die Authentifizierung fehlschlägt. Voreinstellung ist 0.</para>
+                    <para>Bitte beachten Sie, dass diese Option möglicherweise nicht wie erwartet
+funktioniert, falls eine Anwendung, die PAM aufruft, den Benutzerdialog
+selbst abwickelt. Ein typisches Beispiel ist <command>sshd</command> mit
+<option>PasswordAuthentication</option>.</para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>ignore_unknown_user</option>
+                </term>
+                <listitem>
+                    <para>Falls diese Option angegeben ist, aber der Benutzer nicht existiert, gibt
+das PAM-Modul den Wert PAM_IGNORE zurück. Dies hat zur Folge, dass das
+PAM-Framework dieses Modul ignoriert.</para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>ignore_authinfo_unavail</option>
+                </term>
+                <listitem>
+                    <para>
+                    Gibt an, dass das PAM-Modul PAM_IGNORE zurückgeben soll, falls der
+SSSD-Daemon nicht kontaktiert werden kann. Dies hat zur Folge, dass das
+PAM-Framework dieses Modul ignoriert.</para>
+                </listitem>
+            </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>domains</option>
+                </term>
+                <listitem>
+                    <para>
+                        Allows the administrator to restrict the domains a particular PAM service is
+allowed to authenticate against. The format is a comma-separated list of
+SSSD domain names, as specified in the sssd.conf file.
+                    </para>
+                    <para>
+                        NOTE: Must be used in conjunction with the <quote>pam_trusted_users</quote>
+and <quote>pam_public_domains</quote> options.  Please see the
+<citerefentry> <refentrytitle>sssd.conf</refentrytitle>
+<manvolnum>5</manvolnum> </citerefentry> manual page for more information on
+these two PAM responder options.
+                    </para>
+                </listitem>
+            </varlistentry>
+        </variablelist>
+    </refsect1>
+
+    <refsect1 id='module_types_provides'>
+        <title>BEREITGESTELLTE MODULTYPEN</title>
+        <para>Alle Modultypen (<option>account</option>, <option>auth</option>,
+<option>password</option> und <option>session</option>) werden
+bereitgestellt.
+        </para>
+    </refsect1>
+
+    <refsect1 id='files'>
+        <title>DATEIEN</title>
+        <para>Falls ein Zurücksetzen des Passworts durch Root fehlschlägt, weil der
+zugehörige SSSD-Anbieter das Zurücksetzen von Passwörtern nicht unterstützt,
+kann eine individuelle Nachricht angezeigt werden. Diese Nachricht kann
+z.B. Anweisungen enthalten, wie ein Passwort zurückgesetzt wird.</para>
+
+        <para>Die Nachricht wird aus der Datei
+<filename>pam_sss_pw_reset_message.LOC</filename> gelesen, wobei LOC für
+eine durch <citerefentry>
+<refentrytitle>setlocale</refentrytitle><manvolnum>3</manvolnum>
+</citerefentry> zurückgegebene Zeichenkette steht. Falls dort keine passende
+Datei ist, wird der Inhalt von
+<filename>pam_sss_pw_reset_message.txt</filename> angezeigt. Root muss der
+Besitzer der Dateien sein und nur Root kann Lese- und Schreibrechte haben,
+während alle anderen Anwender nur Leserechte haben dürfen.</para>
+
+        <para>Diese Dateien werden im Verzeichnis
+<filename>/etc/sssd/customize/DOMAIN_NAME/</filename> gesucht. Falls keine
+passende Datei vorhanden ist, wird eine allgemeine Nachricht angezeigt.</para>
+    </refsect1>
+
+    <xi:include xmlns:xi="http://www.w3.org/2001/XInclude" href="include/seealso.xml" />
+
+</refentry>
+</reference>

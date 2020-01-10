@@ -1,0 +1,110 @@
+From 8a210c3524818878a7d026ba99c1c32620c2cbb8 Mon Sep 17 00:00:00 2001
+From: Petr Cech <pcech@redhat.com>
+Date: Fri, 13 May 2016 05:21:07 -0400
+Subject: [PATCH 111/114] AD_PROVIDER: Add ad_enabled_domains option
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/2828
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit d6342c92c226becbdd254f90a0005b8c00c300dc)
+---
+ src/config/SSSDConfig/__init__.py.in   |  1 +
+ src/config/etc/sssd.api.d/sssd-ad.conf |  1 +
+ src/man/sssd-ad.5.xml                  | 27 +++++++++++++++++++++++++++
+ src/providers/ad/ad_common.h           |  1 +
+ src/providers/ad/ad_opts.c             |  1 +
+ 5 files changed, 31 insertions(+)
+
+diff --git a/src/config/SSSDConfig/__init__.py.in b/src/config/SSSDConfig/__init__.py.in
+index d9f741e329538968aba5c03e744f3633206aef26..8c564d118cab28336eb9c596af1e02d501886638 100644
+--- a/src/config/SSSDConfig/__init__.py.in
++++ b/src/config/SSSDConfig/__init__.py.in
+@@ -186,6 +186,7 @@ option_strings = {
+ 
+     # [provider/ad]
+     'ad_domain' : _('Active Directory domain'),
++    'ad_enabled_domains' : _('Enabled Active Directory domains'),
+     'ad_server' : _('Active Directory server address'),
+     'ad_backup_server' : _('Active Directory backup server address'),
+     'ad_hostname' : _('Active Directory client hostname'),
+diff --git a/src/config/etc/sssd.api.d/sssd-ad.conf b/src/config/etc/sssd.api.d/sssd-ad.conf
+index 149590f4f30de3438f2fc5534ae65c98ee0f10ad..4be51868567fc66d4326c9ae065054ac038a3314 100644
+--- a/src/config/etc/sssd.api.d/sssd-ad.conf
++++ b/src/config/etc/sssd.api.d/sssd-ad.conf
+@@ -1,5 +1,6 @@
+ [provider/ad]
+ ad_domain = str, None, false
++ad_enabled_domains = str, None, false
+ ad_server = str, None, false
+ ad_backup_server = str, None, false
+ ad_hostname = str, None, false
+diff --git a/src/man/sssd-ad.5.xml b/src/man/sssd-ad.5.xml
+index 4280eac5f4594b26d158a0ea58622f9fe7beb53e..231abc6479aa6e083077c7d2fc63c7abd21d1d4b 100644
+--- a/src/man/sssd-ad.5.xml
++++ b/src/man/sssd-ad.5.xml
+@@ -114,6 +114,33 @@ ldap_id_mapping = False
+                 </varlistentry>
+ 
+                 <varlistentry>
++                    <term>ad_enabled_domains (string)</term>
++                    <listitem>
++                        <para>
++                            A comma-separated list of enabled Active Directory domains.
++                            If provided, SSSD will ignore any domains not listed in this
++                            option. If left unset, all domains from the AD forest will
++                            be available.
++                        </para>
++                        <para>
++                            For proper operation, this option must be specified in all
++                            lower-case and as the fully qualified domain name of the
++                            Active Directory domain. For example:
++                            <programlisting>
++ad_enabled_domains = sales.example.com, eng.example.com
++                            </programlisting>
++                        </para>
++                        <para>
++                            The short domain name (also known as the NetBIOS or the flat
++                            name) will be autodetected by SSSD.
++                        </para>
++                        <para>
++                            Default: Not set
++                        </para>
++                    </listitem>
++                </varlistentry>
++
++                <varlistentry>
+                     <term>ad_server, ad_backup_server (string)</term>
+                     <listitem>
+                         <para>
+diff --git a/src/providers/ad/ad_common.h b/src/providers/ad/ad_common.h
+index cc66f3aa6e2e0b621bf6f038adaecc8fa759b3cc..7db09fa74bc5f5b5227a9c30fb0d8b2c9fd798e6 100644
+--- a/src/providers/ad/ad_common.h
++++ b/src/providers/ad/ad_common.h
+@@ -42,6 +42,7 @@ struct ad_options;
+ 
+ enum ad_basic_opt {
+     AD_DOMAIN = 0,
++    AD_ENABLED_DOMAINS,
+     AD_SERVER,
+     AD_BACKUP_SERVER,
+     AD_HOSTNAME,
+diff --git a/src/providers/ad/ad_opts.c b/src/providers/ad/ad_opts.c
+index 28d4768b20bd035f7c1971c95f9b6b690844816e..1823202c4cb072e10601b64e97b55eecf7bfb39c 100644
+--- a/src/providers/ad/ad_opts.c
++++ b/src/providers/ad/ad_opts.c
+@@ -28,6 +28,7 @@
+ 
+ struct dp_option ad_basic_opts[] = {
+     { "ad_domain", DP_OPT_STRING, NULL_STRING, NULL_STRING },
++    { "ad_enabled_domains", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "ad_server", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "ad_backup_server", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "ad_hostname", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+-- 
+2.7.4
+
