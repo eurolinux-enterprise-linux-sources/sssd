@@ -1,0 +1,56 @@
+From 25ab9a1bc9fa90f58f2d27eb4f6b4f0ab0efcc2f Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Mon, 8 Jan 2018 18:23:50 +0100
+Subject: [PATCH] ipa: remove SYSDB_USER_CERT from sub-domain users
+
+If there are no certificates returned for a sub-domain user from the IPA
+server to the client we should make sure they are not present in the
+client's cache anymore and remove the whole attribute from the cached
+user entry.
+
+Related to https://pagure.io/SSSD/sssd/issue/3603
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 43003851129556acea15539a1dc0d4350d54cac8)
+(cherry picked from commit 24165ebec6fc3c76f93750022671c153f94b0d4e)
+(cherry picked from commit 5d2e7c3154ab4b7e2123b3418debf2e5359a0917)
+---
+ src/providers/ipa/ipa_s2n_exop.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/src/providers/ipa/ipa_s2n_exop.c b/src/providers/ipa/ipa_s2n_exop.c
+index cf6f0c6214c31a09e663e40140a969a2301039c7..295892a3e5d21204b6b828cd459c30238a6668ba 100644
+--- a/src/providers/ipa/ipa_s2n_exop.c
++++ b/src/providers/ipa/ipa_s2n_exop.c
+@@ -1798,12 +1798,14 @@ static errno_t ipa_s2n_save_objects(struct sss_domain_info *dom,
+     char ** exop_grouplist;
+     struct ldb_message *msg;
+     struct ldb_message_element *el = NULL;
++
+     /* The list of elements that might be missing are:
+      * - SYSDB_ORIG_MEMBEROF
+      * - SYSDB_SSH_PUBKEY
++     * - SYSDB_USER_CERT
+      * Note that the list includes the trailing NULL at the end. */
+     size_t missing_count = 0;
+-    const char *missing[] = {NULL, NULL, NULL};
++    const char *missing[] = {NULL, NULL, NULL, NULL};
+ 
+     tmp_ctx = talloc_new(NULL);
+     if (tmp_ctx == NULL) {
+@@ -2045,6 +2047,12 @@ static errno_t ipa_s2n_save_objects(struct sss_domain_info *dom,
+                 missing[missing_count++] = SYSDB_SSH_PUBKEY;
+             }
+ 
++            ret = sysdb_attrs_get_el_ext(attrs->sysdb_attrs,
++                                         SYSDB_USER_CERT, false, &el);
++            if (ret == ENOENT) {
++                missing[missing_count++] = SYSDB_USER_CERT;
++            }
++
+             ret = sysdb_transaction_start(dom->sysdb);
+             if (ret != EOK) {
+                 DEBUG(SSSDBG_CRIT_FAILURE, "Failed to start transaction\n");
+-- 
+2.14.3
+

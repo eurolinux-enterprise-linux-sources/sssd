@@ -1,0 +1,107 @@
+From d45ffce2bbe5a91b7a2caae08ce68563c39dcdf3 Mon Sep 17 00:00:00 2001
+From: Lukas Slebodnik <lslebodn@redhat.com>
+Date: Wed, 24 Jan 2018 11:34:59 +0100
+Subject: [PATCH] TESTS: Extend code coverage for murmurhash3
+
+* add positive test for trailing NUL character
+* add test for corner cases (0, input_len + 1)
+
+Reviewed-by: Sumit Bose <sbose@redhat.com>
+(cherry picked from commit 8f83feea4586a8fcf4365e0d22e0a16740424cc2)
+(cherry picked from commit 6c8757680bae643af6d45bfc2d571fae3ba3bad3)
+(cherry picked from commit ed20f00a38783ebdf88d88384c51c02e855450bd)
+---
+ src/tests/pysss_murmur-test.py | 62 ++++++++++++++++++++++++++++++++----------
+ 1 file changed, 47 insertions(+), 15 deletions(-)
+
+diff --git a/src/tests/pysss_murmur-test.py b/src/tests/pysss_murmur-test.py
+index 1cbbe4d03172804ef16b630d3dd1c3a22e09a20a..cf35f9658c6b609a62d425d4cd2f5c0672a4a12c 100755
+--- a/src/tests/pysss_murmur-test.py
++++ b/src/tests/pysss_murmur-test.py
+@@ -73,26 +73,53 @@ class PySssMurmurImport(unittest.TestCase):
+             raise e
+         self.assertEqual(pysss_murmur.__file__, MODPATH + "/pysss_murmur.so")
+ 
+-class PySssMurmurTest(unittest.TestCase):
+-    @classmethod
+-    def tearDownClass(cls):
+-        os.unlink(MODPATH + "/pysss_murmur.so")
+-        os.rmdir(MODPATH)
+ 
+-    def testExpectedHash(self):
+-        hash = pysss_murmur.murmurhash3("S-1-5-21-2153326666-2176343378-3404031434", 41, 0xdeadbeef)
+-        self.assertEqual(hash, 93103853)
+-
+-    def testInvalidArguments(self):
++class PySssMurmurTestNeg(unittest.TestCase):
++    def test_invalid_arguments(self):
+         self.assertRaises(ValueError, pysss_murmur.murmurhash3, 1, 2, 3)
+         self.assertRaises(ValueError, pysss_murmur.murmurhash3, "test", 2)
+         self.assertRaises(ValueError, pysss_murmur.murmurhash3, "test")
+         self.assertRaises(ValueError, pysss_murmur.murmurhash3)
+-        self.assertRaises(ValueError, pysss_murmur.murmurhash3, "test", -1, 3)
+-        self.assertRaises(ValueError, pysss_murmur.murmurhash3, "test", 2,
+-                          0xffffffffff)
++
++    def test_invalid_length(self):
++        seed = 12345
++
++        self.assertRaises(ValueError, pysss_murmur.murmurhash3, "t", -1, seed)
++        # length is off by one
++        self.assertRaises(ValueError, pysss_murmur.murmurhash3, "test", 5,
++                          seed)
+         self.assertRaises(ValueError, pysss_murmur.murmurhash3, "test",
+-                          0xffffffffff, 3)
++                          0xffffffffff, seed)
++
++
++class PySssMurmurTestPos(unittest.TestCase):
++    @classmethod
++    def tearDownClass(cls):
++        os.unlink(MODPATH + "/pysss_murmur.so")
++        os.rmdir(MODPATH)
++
++    def testExpectedHash(self):
++        sid_str = "S-1-5-21-2153326666-2176343378-3404031434"
++        seed = 0xdeadbeef
++
++        hash_val = pysss_murmur.murmurhash3(sid_str, 0, seed)
++        self.assertEqual(hash_val, 233162409)
++
++        hash_val = pysss_murmur.murmurhash3(sid_str, len(sid_str), seed)
++        self.assertEqual(hash_val, 93103853)
++
++    def test_memory_cache_usage(self):
++        seed = 0xbeefdead
++        input_str = "test_user1"
++        input_len = len(input_str)
++
++        val_bin = pysss_murmur.murmurhash3(input_str + '\0',
++                                           input_len + 1, seed)
++        self.assertEqual(val_bin, 1198610880)
++
++        val_bin = pysss_murmur.murmurhash3(input_str + '\0' * 5,
++                                           input_len + 5, seed)
++        self.assertEqual(val_bin, 2917868047)
+ 
+ 
+ if __name__ == "__main__":
+@@ -110,9 +137,14 @@ if __name__ == "__main__":
+     sys.path.insert(0, MODPATH)
+     import pysss_murmur
+ 
+-    suite = unittest.TestLoader().loadTestsFromTestCase(PySssMurmurTest)
++    suite = unittest.TestLoader().loadTestsFromTestCase(PySssMurmurTestNeg)
+     res = unittest.TextTestRunner().run(suite)
+     if not res.wasSuccessful():
+         error |= 0x2
+ 
++    suite = unittest.TestLoader().loadTestsFromTestCase(PySssMurmurTestPos)
++    res = unittest.TextTestRunner().run(suite)
++    if not res.wasSuccessful():
++        error |= 0x4
++
+     sys.exit(error)
+-- 
+2.14.3
+

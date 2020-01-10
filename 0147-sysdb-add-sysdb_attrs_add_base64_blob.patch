@@ -1,0 +1,127 @@
+From 71df3c15f3cb7a2955b7823875a59197bc3d85ef Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Mon, 30 Nov 2015 12:14:16 +0100
+Subject: [PATCH] sysdb: add sysdb_attrs_add_base64_blob()
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 6cdeb0923c16e3fafe21aaadca6dac1d71474c31)
+(cherry picked from commit aec447a206a34909a0becd6098d12b268270a4c3)
+
+DOWNSTREAM:
+Resolves: rhbz#1442703 - Smart Cards: Certificate in the ID View
+---
+ src/db/sysdb.c                      | 22 ++++++++++++++++++++++
+ src/db/sysdb.h                      |  2 ++
+ src/tests/cmocka/test_sysdb_utils.c | 36 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 60 insertions(+)
+
+diff --git a/src/db/sysdb.c b/src/db/sysdb.c
+index d4366a3c76f114bf113567754a1e0417afe664e3..8552d77b7e2cea45dda42bb56123199f4a99bf62 100644
+--- a/src/db/sysdb.c
++++ b/src/db/sysdb.c
+@@ -23,6 +23,7 @@
+ #include "util/util.h"
+ #include "util/strtonum.h"
+ #include "util/sss_utf8.h"
++#include "util/crypto/sss_crypto.h"
+ #include "db/sysdb_private.h"
+ #include "confdb/confdb.h"
+ #include <time.h>
+@@ -634,6 +635,27 @@ int sysdb_attrs_add_mem(struct sysdb_attrs *attrs, const char *name,
+ 	return sysdb_attrs_add_val(attrs, name, &v);
+ }
+ 
++int sysdb_attrs_add_base64_blob(struct sysdb_attrs *attrs, const char *name,
++                                const char *base64_str)
++{
++    struct ldb_val v;
++    int ret;
++
++    if (base64_str == NULL) {
++        return EINVAL;
++    }
++
++    v.data = sss_base64_decode(attrs, base64_str, &v.length);
++    if (v.data == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "sss_base64_decode failed.\n");
++        return ENOMEM;
++    }
++
++    ret = sysdb_attrs_add_val(attrs, name, &v);
++    talloc_free(v.data);
++    return ret;
++}
++
+ int sysdb_attrs_add_bool(struct sysdb_attrs *attrs,
+                          const char *name, bool value)
+ {
+diff --git a/src/db/sysdb.h b/src/db/sysdb.h
+index b93d01583912276ba4885f74398d5bf0cb7afc66..8cd8a20379781d394e4ec23d297470e70e131ada 100644
+--- a/src/db/sysdb.h
++++ b/src/db/sysdb.h
+@@ -321,6 +321,8 @@ int sysdb_attrs_add_lower_case_string(struct sysdb_attrs *attrs, bool safe,
+                                       const char *name, const char *str);
+ int sysdb_attrs_add_mem(struct sysdb_attrs *attrs, const char *name,
+                         const void *mem, size_t size);
++int sysdb_attrs_add_base64_blob(struct sysdb_attrs *attrs, const char *name,
++                                const char *base64_str);
+ int sysdb_attrs_add_bool(struct sysdb_attrs *attrs,
+                          const char *name, bool value);
+ int sysdb_attrs_add_long(struct sysdb_attrs *attrs,
+diff --git a/src/tests/cmocka/test_sysdb_utils.c b/src/tests/cmocka/test_sysdb_utils.c
+index b791f14b7fdfdd4e55343fc1c03a7fd55d8ed101..570fe023516e35026a75982cd06aaf227cadea0c 100644
+--- a/src/tests/cmocka/test_sysdb_utils.c
++++ b/src/tests/cmocka/test_sysdb_utils.c
+@@ -103,6 +103,41 @@ static void test_sysdb_handle_original_uuid(void **state)
+     talloc_free(dest_attrs);
+ }
+ 
++#define TEST_BASE64_ABC "YWJj"
++#define TEST_BASE64_123 "AQID"
++static void test_sysdb_attrs_add_base64_blob(void **state)
++{
++    struct sysdb_attrs *attrs;
++    struct ldb_message_element *el;
++    char zero[] = { '\1', '\2', '\3' };
++    int ret;
++
++    attrs = sysdb_new_attrs(NULL);
++    assert_non_null(attrs);
++
++    ret = sysdb_attrs_add_base64_blob(attrs, "testAttrABC", TEST_BASE64_ABC);
++    assert_int_equal(ret, EOK);
++
++    ret = sysdb_attrs_add_base64_blob(attrs, "testAttr000", TEST_BASE64_123);
++    assert_int_equal(ret, EOK);
++
++    ret = sysdb_attrs_get_el(attrs, "testAttrABC", &el);
++    assert_int_equal(ret, EOK);
++    assert_int_equal(el->num_values, 1);
++    assert_non_null(el->values);
++    assert_non_null(el->values[0].data);
++    assert_int_equal(el->values[0].length, 3);
++    assert_memory_equal(el->values[0].data, "abc", 3);
++
++    ret = sysdb_attrs_get_el(attrs, "testAttr000", &el);
++    assert_int_equal(ret, EOK);
++    assert_int_equal(el->num_values, 1);
++    assert_non_null(el->values);
++    assert_non_null(el->values[0].data);
++    assert_int_equal(el->values[0].length, 3);
++    assert_memory_equal(el->values[0].data, zero, 3);
++}
++
+ int main(int argc, const char *argv[])
+ {
+     int rv;
+@@ -116,6 +151,7 @@ int main(int argc, const char *argv[])
+ 
+     const struct CMUnitTest tests[] = {
+         cmocka_unit_test(test_sysdb_handle_original_uuid),
++        cmocka_unit_test(test_sysdb_attrs_add_base64_blob),
+     };
+ 
+     /* Set debug level to invalid value so we can deside if -d 0 was used. */
+-- 
+2.14.3
+

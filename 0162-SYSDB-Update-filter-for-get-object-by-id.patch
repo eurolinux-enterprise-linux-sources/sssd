@@ -1,0 +1,35 @@
+From d223f84ee945febbbba15ba854ebb8a0d7ff39c2 Mon Sep 17 00:00:00 2001
+From: Lukas Slebodnik <lslebodn@redhat.com>
+Date: Sat, 21 Jan 2017 19:07:45 +0100
+Subject: [PATCH] SYSDB: Update filter for get object by id
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3283
+
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit 2a2014d706478561e6f7dc938751bc224a93fee5)
+(cherry picked from commit 353853d479225ba7a625658e58a3af989de909a5)
+(cherry picked from commit 76b79f5a816152d5aa07618b7825fb4926d15f1e)
+---
+ src/db/sysdb.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/db/sysdb.h b/src/db/sysdb.h
+index 156fc713771c2ef14fc20c9ad6fdb635ecc4ed0a..ddbc1bfeb904f60358026798fa410ba500835d2a 100644
+--- a/src/db/sysdb.h
++++ b/src/db/sysdb.h
+@@ -197,7 +197,7 @@
+ #define SYSDB_SID_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))("SYSDB_SID_STR"=%s))"
+ #define SYSDB_UUID_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))("SYSDB_UUID"=%s))"
+ #define SYSDB_NAME_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))(|("SYSDB_NAME_ALIAS"=%s)("SYSDB_NAME"=%s)))"
+-#define SYSDB_ID_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))(|("SYSDB_UIDNUM"=%u)("SYSDB_GIDNUM"=%u)))"
++#define SYSDB_ID_FILTER "(|(&("SYSDB_UC")("SYSDB_UIDNUM"=%u))(&("SYSDB_GC")("SYSDB_GIDNUM"=%u)))"
+ #define SYSDB_USER_CERT_FILTER "(&("SYSDB_UC")%s)"
+ 
+ #define SYSDB_HAS_ENUMERATED "has_enumerated"
+-- 
+2.14.3
+

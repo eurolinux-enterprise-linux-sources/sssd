@@ -1,0 +1,144 @@
+From 1e43b45853df3a9bf0183071c61163e06d2a74e4 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Thu, 5 Oct 2017 11:07:38 +0200
+Subject: [PATCH] sysdb: sanitize search filter input
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This patch sanitizes the input for sysdb searches by UPN/email, SID and
+UUID.
+
+This security issue was assigned CVE-2017-12173
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3549
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 1f2662c8f97c9c0fa250055d4b6750abfc6d0835)
+(cherry picked from commit e45e50e4523e36f310d7ff0b052500c024c434bf)
+(cherry picked from commit 3cf0aa1904fe791eed414bfb532c91a79ea2df9c)
+---
+ src/db/sysdb_ops.c      | 43 +++++++++++++++++++++++++++++++++++--------
+ src/tests/sysdb-tests.c |  7 +++++++
+ 2 files changed, 42 insertions(+), 8 deletions(-)
+
+diff --git a/src/db/sysdb_ops.c b/src/db/sysdb_ops.c
+index b159c4785ac08e0096aeac6cc388a14dc5faaf12..c4fd9a26c0b840a91032fd4259dd74425bd0c274 100644
+--- a/src/db/sysdb_ops.c
++++ b/src/db/sysdb_ops.c
+@@ -486,6 +486,7 @@ int sysdb_search_user_by_upn_res(TALLOC_CTX *mem_ctx,
+     int ret;
+     const char *def_attrs[] = { SYSDB_NAME, SYSDB_UPN, SYSDB_CANONICAL_UPN,
+                                 NULL };
++    char *sanitized;
+ 
+     tmp_ctx = talloc_new(NULL);
+     if (tmp_ctx == NULL) {
+@@ -493,6 +494,12 @@ int sysdb_search_user_by_upn_res(TALLOC_CTX *mem_ctx,
+         goto done;
+     }
+ 
++    ret = sss_filter_sanitize(tmp_ctx, upn, &sanitized);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE, "sss_filter_sanitize failed.\n");
++        goto done;
++    }
++
+     base_dn = sysdb_base_dn(domain->sysdb, tmp_ctx);
+     if (base_dn == NULL) {
+         ret = ENOMEM;
+@@ -501,7 +508,7 @@ int sysdb_search_user_by_upn_res(TALLOC_CTX *mem_ctx,
+ 
+     ret = ldb_search(domain->sysdb->ldb, tmp_ctx, &res,
+                      base_dn, LDB_SCOPE_SUBTREE, attrs ? attrs : def_attrs,
+-                     SYSDB_PWUPN_FILTER, upn, upn);
++                     SYSDB_PWUPN_FILTER, sanitized, sanitized);
+     if (ret != EOK) {
+         ret = sysdb_error_to_errno(ret);
+         goto done;
+@@ -3722,16 +3729,30 @@ static errno_t sysdb_search_object_by_str_attr(TALLOC_CTX *mem_ctx,
+                                                const char **attrs,
+                                                struct ldb_result **_res)
+ {
+-    char *filter;
++    char *filter = NULL;
+     errno_t ret;
++    char *sanitized = NULL;
+ 
+-    filter = talloc_asprintf(NULL, filter_tmpl, str);
++    if (str == NULL) {
++        return EINVAL;
++    }
++
++    ret = sss_filter_sanitize(NULL, str, &sanitized);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE, "sss_filter_sanitize failed.\n");
++        goto done;
++    }
++
++    filter = talloc_asprintf(NULL, filter_tmpl, sanitized);
+     if (filter == NULL) {
+-        return ENOMEM;
++        ret = ENOMEM;
++        goto done;
+     }
+ 
+     ret = sysdb_search_object_attr(mem_ctx, domain, filter, attrs, _res);
+ 
++done:
++    talloc_free(sanitized);
+     talloc_free(filter);
+     return ret;
+ }
+@@ -3820,7 +3841,8 @@ errno_t sysdb_search_object_by_cert(TALLOC_CTX *mem_ctx,
+                                     struct ldb_result **res)
+ {
+     int ret;
+-    char *user_filter;
++    char *user_filter = NULL;
++    char *filter = NULL;
+ 
+     ret = sss_cert_derb64_to_ldap_filter(mem_ctx, cert, SYSDB_USER_CERT,
+                                          &user_filter);
+@@ -3829,10 +3851,15 @@ errno_t sysdb_search_object_by_cert(TALLOC_CTX *mem_ctx,
+         return ret;
+     }
+ 
+-    ret = sysdb_search_object_by_str_attr(mem_ctx, domain,
+-                                          SYSDB_USER_CERT_FILTER,
+-                                          user_filter, attrs, res);
++    filter = talloc_asprintf(NULL, SYSDB_USER_CERT_FILTER, user_filter);
+     talloc_free(user_filter);
++    if (filter == NULL) {
++        return ENOMEM;
++    }
++
++    ret = sysdb_search_object_attr(mem_ctx, domain, filter, attrs, res);
++
++    talloc_free(filter);
+ 
+     return ret;
+ }
+diff --git a/src/tests/sysdb-tests.c b/src/tests/sysdb-tests.c
+index 510ac265f314ebff073eeed489a7c94dee7900ba..fd148e7663fbf791695388f092501804a3868350 100644
+--- a/src/tests/sysdb-tests.c
++++ b/src/tests/sysdb-tests.c
+@@ -6211,6 +6211,13 @@ START_TEST(test_upn_basic)
+     fail_unless(strcmp(str, UPN_PRINC) == 0,
+                 "Expected [%s], got [%s].", UPN_PRINC, str);
+ 
++    /* check if input is sanitized */
++    ret = sysdb_search_user_by_upn(test_ctx, test_ctx->domain,
++                                   "abc@def.ghi)(name="UPN_USER_NAME")(abc=xyz",
++                                   NULL, &msg);
++    fail_unless(ret == ENOENT,
++                "sysdb_search_user_by_upn failed with un-sanitized input.");
++
+     talloc_free(test_ctx);
+ }
+ END_TEST
+-- 
+2.14.3
+

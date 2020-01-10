@@ -1,0 +1,401 @@
+From fe9777837e4cb5ef8a2d621ab47b40a1d337a074 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Mon, 25 Apr 2016 16:09:48 +0200
+Subject: [PATCH] NSS: add SSS_NSS_GETNAMEBYCERT request
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 1a45124f3f300f9afdcb08eab0938e5e7d0534d9 with
+backport fixes)
+(cherry picked from commit 81f9af96065eb94ed0a9e6ef2b759761406b4b81)
+---
+ Makefile.am                     |   3 +
+ src/responder/nss/nsssrv_cmd.c  | 117 ++++++++++++++++++++++++++++++++
+ src/sss_client/sss_cli.h        |   5 ++
+ src/tests/cmocka/test_nss_srv.c | 145 ++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 270 insertions(+)
+
+diff --git a/Makefile.am b/Makefile.am
+index 485c5f991345236aad2f57b18aa7e90eeaae4f51..3427c78f5e67d61f9720f65d942531d4dd4789e4 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -1113,6 +1113,7 @@ sssd_nss_LDADD = \
+     $(TDB_LIBS) \
+     $(SSSD_LIBS) \
+     libsss_idmap.la \
++    libsss_cert.la \
+     $(SSSD_INTERNAL_LTLIBS)
+ 
+ sssd_pam_SOURCES = \
+@@ -1905,6 +1906,7 @@ nss_srv_tests_LDFLAGS = \
+     -Wl,-wrap,sss_ncache_check_user \
+     -Wl,-wrap,sss_ncache_check_uid \
+     -Wl,-wrap,sss_ncache_check_sid \
++    -Wl,-wrap,sss_ncache_check_cert \
+     -Wl,-wrap,sss_packet_get_body \
+     -Wl,-wrap,sss_packet_get_cmd \
+     -Wl,-wrap,sss_cmd_send_empty \
+@@ -1914,6 +1916,7 @@ nss_srv_tests_LDADD = \
+     $(SSSD_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS) \
+     libsss_test_common.la \
++    libsss_cert.la \
+     libsss_idmap.la
+ 
+ EXTRA_pam_srv_tests_DEPENDENCIES = \
+diff --git a/src/responder/nss/nsssrv_cmd.c b/src/responder/nss/nsssrv_cmd.c
+index 0f4ce36321ace357df6bb67c5ab7aeff36269fb4..5b438fb31e84e2001bf768180efa329d18f3d39c 100644
+--- a/src/responder/nss/nsssrv_cmd.c
++++ b/src/responder/nss/nsssrv_cmd.c
+@@ -23,12 +23,14 @@
+ #include "util/sss_nss.h"
+ #include "util/sss_cli_cmd.h"
+ #include "util/crypto/sss_crypto.h"
++#include "util/cert.h"
+ #include "responder/nss/nsssrv.h"
+ #include "responder/nss/nsssrv_private.h"
+ #include "responder/nss/nsssrv_netgroup.h"
+ #include "responder/nss/nsssrv_services.h"
+ #include "responder/nss/nsssrv_mmap_cache.h"
+ #include "responder/common/negcache.h"
++#include "responder/common/responder_cache_req.h"
+ #include "providers/data_provider.h"
+ #include "confdb/confdb.h"
+ #include "db/sysdb.h"
+@@ -5523,6 +5525,115 @@ done:
+     return nss_cmd_done(cmdctx, ret);
+ }
+ 
++static void users_find_by_cert_done(struct tevent_req *req);
++
++static int nss_cmd_getbycert(enum sss_cli_command cmd, struct cli_ctx *cctx)
++{
++
++    struct tevent_req *req;
++    uint8_t *body;
++    size_t blen;
++    int ret;
++    const char *derb64;
++    char *pem_cert = NULL;
++    size_t pem_size;
++    struct nss_ctx *nctx;
++
++    nctx = talloc_get_type(cctx->rctx->pvt_ctx, struct nss_ctx);
++
++    if (cmd != SSS_NSS_GETNAMEBYCERT) {
++        DEBUG(SSSDBG_CRIT_FAILURE, "Invalid command type [%d][%s].\n",
++              cmd, sss_cmd2str(cmd));
++        return EINVAL;
++    }
++
++    /* get certificate to query */
++    sss_packet_get_body(cctx->creq->in, &body, &blen);
++
++    /* if not terminated fail */
++    if (body[blen - 1] != '\0') {
++        return EINVAL;
++    }
++
++    derb64 = (const char *)body;
++
++    /* check input */
++    ret = sss_cert_derb64_to_pem(cctx, derb64, &pem_cert, &pem_size);
++    talloc_free(pem_cert);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE, "sss_cert_pem_to_derb64 failed.\n");
++        return ret;
++    }
++
++    req = cache_req_user_by_cert_send(cctx, cctx->rctx->ev, cctx->rctx,
++                                      nctx->ncache, nctx->neg_timeout,
++                                      0, NULL, derb64);
++    if (req == NULL) {
++        return ENOMEM;
++    }
++
++    tevent_req_set_callback(req, users_find_by_cert_done, cctx);
++
++    return EOK;
++}
++
++static void users_find_by_cert_done(struct tevent_req *req)
++{
++    struct cli_ctx *cctx;
++    struct sss_domain_info *domain;
++    struct ldb_result *result;
++    errno_t ret;
++
++    cctx = tevent_req_callback_data(req, struct cli_ctx);
++
++    ret = cache_req_user_by_cert_recv(cctx, req, &result, &domain, NULL);
++    talloc_zfree(req);
++    if (ret == ENOENT || result->count == 0) {
++        ret = ENOENT;
++        goto done;
++    } else if (ret != EOK) {
++        goto done;
++    }
++
++    if (result->count > 1) {
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "Found more than 1 result with certficate search.\n");
++
++        ret = EINVAL;
++        goto done;
++    }
++
++    ret = sss_packet_new(cctx->creq, 0,
++                         sss_packet_get_cmd(cctx->creq->in),
++                         &cctx->creq->out);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE, "sss_packet_new failed.\n");
++        ret = EFAULT;
++        goto done;
++    }
++
++    ret = fill_name(cctx->creq->out, domain, SSS_ID_TYPE_UID, true,
++                    result->msgs[0]);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE, "fill_name failed.\n");
++        goto done;
++    }
++
++    ret = EOK;
++
++done:
++    if (ret == EOK) {
++        sss_packet_set_error(cctx->creq->out, EOK);
++        sss_cmd_done(cctx, NULL);
++    } else if (ret == ENOENT) {
++        sss_cmd_send_empty(cctx, NULL);
++    } else {
++        sss_cmd_send_error(cctx, ret);
++    }
++
++    return;
++}
++
+ static int nss_cmd_getsidbyname(struct cli_ctx *cctx)
+ {
+     return nss_cmd_getbynam(SSS_NSS_GETSIDBYNAME, cctx);
+@@ -5548,6 +5659,11 @@ static int nss_cmd_getorigbyname(struct cli_ctx *cctx)
+     return nss_cmd_getbynam(SSS_NSS_GETORIGBYNAME, cctx);
+ }
+ 
++static int nss_cmd_getnamebycert(struct cli_ctx *cctx)
++{
++    return nss_cmd_getbycert(SSS_NSS_GETNAMEBYCERT, cctx);
++}
++
+ struct cli_protocol_version *register_cli_protocol_version(void)
+ {
+     static struct cli_protocol_version nss_cli_protocol_version[] = {
+@@ -5584,6 +5700,7 @@ static struct sss_cmd_table nss_cmds[] = {
+     {SSS_NSS_GETNAMEBYSID, nss_cmd_getnamebysid},
+     {SSS_NSS_GETIDBYSID, nss_cmd_getidbysid},
+     {SSS_NSS_GETORIGBYNAME, nss_cmd_getorigbyname},
++    {SSS_NSS_GETNAMEBYCERT, nss_cmd_getnamebycert},
+     {SSS_CLI_NULL, NULL}
+ };
+ 
+diff --git a/src/sss_client/sss_cli.h b/src/sss_client/sss_cli.h
+index f39ceba5e401b742b27a012ea0ef3059cb19aecc..17d8e4503e6cb57fa9c801c54ef71dfbd18d35af 100644
+--- a/src/sss_client/sss_cli.h
++++ b/src/sss_client/sss_cli.h
+@@ -255,6 +255,11 @@ SSS_NSS_GETORIGBYNAME = 0x0115, /**< Takes a zero terminated fully qualified
+                                      second the value. Hence the list should
+                                      have an even number of strings, if not
+                                      the whole list is invalid. */
++SSS_NSS_GETNAMEBYCERT = 0x0116, /**< Takes the zero terminated string
++                                     of the base64 encoded DER representation
++                                     of a X509 certificate and returns the zero
++                                     terminated fully qualified name of the
++                                     related object. */
+ };
+ 
+ /**
+diff --git a/src/tests/cmocka/test_nss_srv.c b/src/tests/cmocka/test_nss_srv.c
+index 072a15a9ed4c54402340798da618a63e30587046..cf19980f3744957ed374c07e5b600efa50a31116 100644
+--- a/src/tests/cmocka/test_nss_srv.c
++++ b/src/tests/cmocka/test_nss_srv.c
+@@ -32,6 +32,8 @@
+ #include "responder/nss/nsssrv_private.h"
+ #include "sss_client/idmap/sss_nss_idmap.h"
+ #include "util/util_sss_idmap.h"
++#include "util/crypto/sss_crypto.h"
++#include "util/crypto/nss/nss_util.h"
+ #include "db/sysdb_private.h"   /* new_subdomain() */
+ 
+ #define TESTS_PATH "tp_" BASE_FILE_STEM
+@@ -196,6 +198,21 @@ int __wrap_sss_ncache_check_sid(struct sss_nc_ctx *ctx,
+     return ret;
+ }
+ 
++int __real_sss_ncache_check_cert(struct sss_nc_ctx *ctx,
++                                 int ttl, const char *cert);
++
++int __wrap_sss_ncache_check_cert(struct sss_nc_ctx *ctx,
++                                 int ttl, const char *cert)
++{
++    int ret;
++
++    ret = __real_sss_ncache_check_cert(ctx, ttl, cert);
++    if (ret == EEXIST) {
++        nss_test_ctx->ncache_hits++;
++    }
++    return ret;
++}
++
+ /* Mock input from the client library */
+ static void mock_input_user_or_group(const char *username)
+ {
+@@ -2969,6 +2986,124 @@ void test_nss_getnamebysid_update(void **state)
+     assert_string_equal(shell, "/bin/ksh");
+ }
+ 
++#define TEST_TOKEN_CERT \
++"MIIECTCCAvGgAwIBAgIBCDANBgkqhkiG9w0BAQsFADA0MRIwEAYDVQQKDAlJUEEu" \
++"REVWRUwxHjAcBgNVBAMMFUNlcnRpZmljYXRlIEF1dGhvcml0eTAeFw0xNTA2MjMx" \
++"NjMyMDdaFw0xNzA2MjMxNjMyMDdaMDIxEjAQBgNVBAoMCUlQQS5ERVZFTDEcMBoG" \
++"A1UEAwwTaXBhLWRldmVsLmlwYS5kZXZlbDCCASIwDQYJKoZIhvcNAQEBBQADggEP" \
++"ADCCAQoCggEBALXUq56VlY+Z0aWLLpFAjFfbElPBXGQsbZb85J3cGyPjaMHC9wS+" \
++"wjB6Ve4HmQyPLx8hbINdDmbawMHYQvTScLYfsqLtj0Lqw20sUUmedk+Es5Oh9VHo" \
++"nd8MavYx25Du2u+T0iSgNIDikXguiwCmtAj8VC49ebbgITcjJGzMmiiuJkV3o93Y" \
++"vvYF0VjLGDQbQWOy7IxzYJeNVJnZWKo67CHdok6qOrm9rxQt81rzwV/mGLbCMUbr" \
++"+N4M8URtd7EmzaYZQmNm//s2owFrCYMxpLiURPj+URZVuB72504/Ix7X0HCbA/AV" \
++"26J27fPY5nc8DMwfhUDCbTqPH/JEjd3mvY8CAwEAAaOCASYwggEiMB8GA1UdIwQY" \
++"MBaAFJOq+KAQmPEnNp8Wok23eGTdE7aDMDsGCCsGAQUFBwEBBC8wLTArBggrBgEF" \
++"BQcwAYYfaHR0cDovL2lwYS1jYS5pcGEuZGV2ZWwvY2Evb2NzcDAOBgNVHQ8BAf8E" \
++"BAMCBPAwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMHQGA1UdHwRtMGsw" \
++"aaAxoC+GLWh0dHA6Ly9pcGEtY2EuaXBhLmRldmVsL2lwYS9jcmwvTWFzdGVyQ1JM" \
++"LmJpbqI0pDIwMDEOMAwGA1UECgwFaXBhY2ExHjAcBgNVBAMMFUNlcnRpZmljYXRl" \
++"IEF1dGhvcml0eTAdBgNVHQ4EFgQUFaDNd5a53QGpaw5m63hnwXicMQ8wDQYJKoZI" \
++"hvcNAQELBQADggEBADH7Nj00qqGhGJeXJQAsepqSskz/wooqXh8vgVyb8SS4N0/c" \
++"0aQtVmY81xamlXE12ZFpwDX43d+EufBkwCUKFX/+8JFDd2doAyeJxv1xM22kKRpc" \
++"AqITPgMsa9ToGMWxjbVpc/X/5YfZixWPF0/eZUTotBj9oaR039UrhGfyN7OguF/G" \
++"rzmxtB5y4ZrMpcD/Oe90mkd9HY7sA/fB8OWOUgeRfQoh97HNS0UiDWsPtfxmjQG5" \
++"zotpoBIZmdH+ipYsu58HohHVlM9Wi5H4QmiiXl+Soldkq7eXYlafcmT7wv8+cKwz" \
++"Nz0Tm3+eYpFqRo3skr6QzXi525Jkg3r6r+kkhxU="
++
++static int test_nss_getnamebycert_check(uint32_t status, uint8_t *body, size_t blen)
++{
++    size_t rp = 2 * sizeof(uint32_t); /* num_results and reserved */
++    uint32_t id_type;
++    const char *name;
++
++    assert_int_equal(status, EOK);
++
++    SAFEALIGN_COPY_UINT32(&id_type, body + rp, &rp);
++    assert_int_equal(id_type, SSS_ID_TYPE_UID);
++
++    name = (const char *)body + rp;
++    assert_string_equal(name, "testcertuser");
++
++    return EOK;
++}
++
++static void test_nss_getnamebycert(void **state)
++{
++    errno_t ret;
++    struct sysdb_attrs *attrs;
++    unsigned char *der = NULL;
++    size_t der_size;
++
++    attrs = sysdb_new_attrs(nss_test_ctx);
++    assert_non_null(attrs);
++
++    der = sss_base64_decode(nss_test_ctx, TEST_TOKEN_CERT, &der_size);
++    assert_non_null(der);
++
++    ret = sysdb_attrs_add_mem(attrs, SYSDB_USER_CERT, der, der_size);
++    talloc_free(der);
++    assert_int_equal(ret, EOK);
++
++    /* Prime the cache with a valid user */
++    ret = sysdb_add_user(nss_test_ctx->tctx->dom,
++                         "testcertuser", 23456, 6890, "test cert user",
++                         "/home/testcertuser", "/bin/sh", NULL,
++                         attrs, 300, 0);
++    assert_int_equal(ret, EOK);
++    talloc_free(attrs);
++
++    mock_input_user_or_group(TEST_TOKEN_CERT);
++    will_return(__wrap_sss_packet_get_cmd, SSS_NSS_GETNAMEBYCERT);
++    mock_fill_bysid();
++
++    /* Query for that user, call a callback when command finishes */
++    /* Should go straight to back end, without contacting DP */
++    set_cmd_cb(test_nss_getnamebycert_check);
++    ret = sss_cmd_execute(nss_test_ctx->cctx, SSS_NSS_GETNAMEBYCERT,
++                          nss_test_ctx->nss_cmds);
++    assert_int_equal(ret, EOK);
++
++    /* Wait until the test finishes with EOK */
++    ret = test_ev_loop(nss_test_ctx->tctx);
++    assert_int_equal(ret, EOK);
++}
++
++void test_nss_getnamebycert_neg(void **state)
++{
++    errno_t ret;
++
++    mock_input_user_or_group(TEST_TOKEN_CERT);
++    mock_account_recv_simple();
++
++    assert_int_equal(nss_test_ctx->ncache_hits, 0);
++
++    ret = sss_cmd_execute(nss_test_ctx->cctx, SSS_NSS_GETNAMEBYCERT,
++                          nss_test_ctx->nss_cmds);
++    assert_int_equal(ret, EOK);
++
++    /* Wait until the test finishes with ENOENT */
++    ret = test_ev_loop(nss_test_ctx->tctx);
++    assert_int_equal(ret, ENOENT);
++    assert_int_equal(nss_test_ctx->ncache_hits, 0);
++
++    /* Test that subsequent search for a nonexistent user yields
++     * ENOENT and Account callback is not called, on the other hand
++     * the ncache functions will be called
++     */
++    nss_test_ctx->tctx->done = false;
++
++    mock_input_user_or_group(TEST_TOKEN_CERT);
++    ret = sss_cmd_execute(nss_test_ctx->cctx, SSS_NSS_GETNAMEBYCERT,
++                          nss_test_ctx->nss_cmds);
++    assert_int_equal(ret, EOK);
++
++    /* Wait until the test finishes with ENOENT */
++    ret = test_ev_loop(nss_test_ctx->tctx);
++    assert_int_equal(ret, ENOENT);
++    /* Negative cache was hit this time */
++    assert_int_equal(nss_test_ctx->ncache_hits, 1);
++}
++
+ int main(int argc, const char *argv[])
+ {
+     int rv;
+@@ -3082,6 +3217,10 @@ int main(int argc, const char *argv[])
+                                         nss_test_setup, nss_test_teardown),
+         cmocka_unit_test_setup_teardown(test_nss_getnamebysid_update,
+                                         nss_test_setup, nss_test_teardown),
++        cmocka_unit_test_setup_teardown(test_nss_getnamebycert_neg,
++                                        nss_test_setup, nss_test_teardown),
++        cmocka_unit_test_setup_teardown(test_nss_getnamebycert,
++                                        nss_test_setup, nss_test_teardown),
+     };
+ 
+     /* Set debug level to invalid value so we can deside if -d 0 was used. */
+@@ -3111,5 +3250,11 @@ int main(int argc, const char *argv[])
+     if (rv == 0 && !no_cleanup) {
+         test_dom_suite_cleanup(TESTS_PATH, TEST_CONF_DB, TEST_DOM_NAME);
+     }
++
++#ifdef HAVE_NSS
++    /* Cleanup NSS and NSPR to make valgrind happy. */
++    nspr_nss_cleanup();
++#endif
++
+     return rv;
+ }
+-- 
+2.14.3
+

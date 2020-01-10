@@ -26,7 +26,7 @@
 
 Name: sssd
 Version: 1.13.3
-Release: 58%{?dist}
+Release: 60%{?dist}
 Group: Applications/System
 Summary: System Security Services Daemon
 License: GPLv3+
@@ -165,7 +165,50 @@ Patch0127: 0127-LDAP-Adding-SIGCHLD-callback.patch
 Patch0128: 0128-GPO-Skip-GPOs-without-gPCFunctionalityVersion.patch
 Patch0129: 0129-gpo-Improve-debug-messages.patch
 Patch0130: 0130-HBAC-Do-not-rely-on-originalMemberOf-use-the-sysdb-m.patch
-Patch0131: 0131-NSS-Use-nss_ctx-as-memory-context-in-set_netgr_lifet.patch
+Patch0131: 0131-pam_sss-check-conversation-callback.patch
+Patch0132: 0132-NSS-continue-with-UPN-email-search-if-name-was-not-f.patch
+Patch0133: 0133-PAM-continue-with-UPN-email-search-if-name-was-not-f.patch
+Patch0134: 0134-NSS-use-different-neg-cache-name-for-UPN-searches.patch
+Patch0135: 0135-PAM-Fix-domain-for-UPN-based-lookups.patch
+Patch0136: 0136-NSS-Use-nss_ctx-as-memory-context-in-set_netgr_lifet.patch
+Patch0137: 0137-sysdb-add-parent_dom-to-sysdb_get_direct_parents.patch
+Patch0138: 0138-sdap-make-some-nested-group-related-calls-public.patch
+Patch0139: 0139-LDAP-AD-resolve-domain-local-groups-for-remote-users.patch
+Patch0140: 0140-LDAP-AD-Do-not-fail-in-case-rfc2307bis_nested_groups.patch
+Patch0141: 0141-mmap_cache-make-checks-independent-of-input-size.patch
+Patch0142: 0142-test_memory_cache-Regression-test-for-3571.patch
+Patch0143: 0143-TESTS-Fix-race-condition-in-python-test.patch
+Patch0144: 0144-TESTS-Extend-code-coverage-for-murmurhash3.patch
+Patch0145: 0145-pysss_murmur-Fix-warning-Wsign-compare.patch
+Patch0146: 0146-pysss_murmur-Allow-to-have-NUL-character-in-python-b.patch
+Patch0147: 0147-sysdb-add-sysdb_attrs_add_base64_blob.patch
+Patch0148: 0148-sysdb-add-searches-by-certificate-with-overrides.patch
+Patch0149: 0149-cache_req-use-overide-aware-call-for-lookup-by-certi.patch
+Patch0150: 0150-ipa-add-support-for-certificate-overrides.patch
+Patch0151: 0151-nss-include-certificates-in-full-result-list.patch
+Patch0152: 0152-ipa-save-cert-as-blob-in-the-cache.patch
+Patch0153: 0153-AD-read-user-certificate-if-available.patch
+Patch0154: 0154-nss-return-user-certificate-base64-encoded.patch
+Patch0155: 0155-sss_override-add-certificate-support.patch
+Patch0156: 0156-IPA-allow-lookups-by-cert-in-sub-domains-on-the-clie.patch
+Patch0157: 0157-NSS-add-SSS_NSS_GETNAMEBYCERT-request.patch
+Patch0158: 0158-nss-idmap-add-sss_nss_getnamebycert.patch
+Patch0159: 0159-cache_req-add-object-by-id.patch
+Patch0160: 0160-sysdb-Search-also-aliases-in-sysdb_search_object_by_.patch
+Patch0161: 0161-sysdb-tests-Add-test-for-sysdb_search_object_by_name.patch
+Patch0162: 0162-SYSDB-Update-filter-for-get-object-by-id.patch
+Patch0163: 0163-sysdb-tests-Add-test-for-sysdb_search_object_by_id.patch
+Patch0164: 0164-sysdb-sanitize-search-filter-input.patch
+Patch0165: 0165-IPA-make-get_object_from_cache-aware-of-UPN-searches.patch
+Patch0166: 0166-NSS-Fix-domain-for-UPN-based-lookups.patch
+Patch0167: 0167-Fix-iterating-to-next-domain-for-initgroup-lookups.patch
+Patch0168: 0168-IPA-Remove-sshPublicKey-attribute-when-it-s-not-set.patch
+Patch0169: 0169-SYSDB_VIEWS-Remove-sshPublicKey-attribute-when-it-s-.patch
+Patch0170: 0170-ipa-remove-SYSDB_USER_CERT-from-sub-domain-users.patch
+
+# This patch is downstream only and should be removed when the proper solution
+# is backported to sssd-1-13
+Patch999: 0999-DP-Rely-on-DP-for-offline-status-don-t-shortcut-requ.patch
 
 ### Dependencies ###
 Requires: sssd-common = %{version}-%{release}
@@ -943,12 +986,27 @@ fi
 %postun -n libsss_idmap -p /sbin/ldconfig
 
 %changelog
-* Fri Jan 12 2018 Jakub Hrozek <jhrozek@redhat.com> - 1.13.3-58
-- Resolves: rhbz#1534618 - ABRT crash - /usr/libexec/sssd/sssd_nss
-                           [rhel-6.9.z]
+* Tue Feb 27 2018 Fabiano Fidêncio <fidencio@redhat.com> - 1.13.3-60
+- Related: rhbz#1442703 - Smart Cards: Certificate in the ID View
+- Related: rhbz# 1401546 - Please back-port fast failover from sssd 1.14 on RHEL 7 into sssd 1.13 on RHEL 6
+
+* Tue Feb 27 2018 Fabiano Fidêncio <fidencio@redhat.com> - 1.13.3-59
+- Resolves: rhbz#1326007 - Memory cache corruption when rsync and/or tar to copy owner and group info from LDAP
+- Resolves: rhbz#1442703 - Smart Cards: Certificate in the ID View
+- Resolves: rhbz#1507435 - CVE-2017-12173 sssd: unsanitized input when searching in local cache database [rhel-6.10]
+- Resolves: rhbz#1487040 - sssd does not evaluate AD UPN suffixes which results in failed user logins
+
+* Thu Dec 14 2017 Fabiano Fidêncio <fidencio@redhat.com> - 1.13.3-58
+- Resolves: rhbz#1421057 - pam_sss crashes in do_pam_conversation if no conversation
+                           function is provided by the client app
+- Resolves: rhbz#1487040 - sssd does not evaluate AD UPN suffixes which results ini
+                           failed user logins
+- Resolves: rhbz#1487944 - ABRT crash - /usr/libexec/sssd/sssd_nss
+- Resolves: rhbz#1489485 - sssd is not pulling groups in a trusted domain, with the
+                           Global scope
 
 * Thu Jul 27 2017 Jakub Hrozek <jhrozek@redhat.com> - 1.13.3-57
-- Resolves: rhbz#1473005 - The originalMemberOf attribute disappears from
+- Resolves: rhbz#1438360 - The originalMemberOf attribute disappears from
                            the cache, causing intermittent HBAC issues
 
 * Fri Jan 27 2017 Lukas Slebodnik <lslebodn@redhat.com> - 1.13.3-56

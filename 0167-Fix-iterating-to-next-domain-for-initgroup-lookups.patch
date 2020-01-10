@@ -1,0 +1,50 @@
+From e60680caefb29f7054930dc63b712f4703e3b5e8 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Thu, 25 Jan 2018 20:14:11 +0100
+Subject: [PATCH] Fix iterating to next domain for initgroup lookups
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This is a sssd-1-13 only commit so that the code in the NSS responder
+matches the behaviour in the master branch as of sssd-1.16.0
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit 99afca8926fb211774de457e750dea27da8ac3a9)
+---
+ src/responder/nss/nsssrv_cmd.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/src/responder/nss/nsssrv_cmd.c b/src/responder/nss/nsssrv_cmd.c
+index 987d0fe9b73add2bfcee08530a489d7349d7ed84..120f55418006d9851616bc4204740dc4a61064d4 100644
+--- a/src/responder/nss/nsssrv_cmd.c
++++ b/src/responder/nss/nsssrv_cmd.c
+@@ -4386,7 +4386,11 @@ static int nss_cmd_initgroups_search(struct nss_dom_ctx *dctx)
+                    name, dom->name);
+             /* if a multidomain search, try with next */
+             if (cmdctx->check_next) {
+-                dom = get_next_domain(dom, 0);
++                if (cmdctx->name_is_upn) {
++                    dom = get_next_domain(dom, SSS_GND_DESCEND);
++                } else {
++                    dom = get_next_domain(dom, 0);
++                }
+                 continue;
+             }
+             /* There are no further domains or this was a
+@@ -4471,7 +4475,11 @@ static int nss_cmd_initgroups_search(struct nss_dom_ctx *dctx)
+ 
+             /* if a multidomain search, try with next */
+             if (cmdctx->check_next) {
+-                dom = get_next_domain(dom, 0);
++                if (cmdctx->name_is_upn) {
++                    dom = get_next_domain(dom, SSS_GND_DESCEND);
++                } else {
++                    dom = get_next_domain(dom, 0);
++                }
+                 if (dom) continue;
+             }
+ 
+-- 
+2.14.3
+

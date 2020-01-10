@@ -1,0 +1,31 @@
+From c062c65f198be3edd13fe4bdfe2c0da01aa8c0fb Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 6 Apr 2016 11:13:22 +0200
+Subject: [PATCH] cache_req: use overide aware call for lookup by certificate
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit cdc3e9dc42e13f01d8e2623e92dd046a5bb169f1 with
+backport fixes)
+(cherry picked from commit e2d9254cf24be128f8593b5629a6ed3ad95bc4e6)
+---
+ src/responder/common/responder_cache_req.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/responder/common/responder_cache_req.c b/src/responder/common/responder_cache_req.c
+index 4ab52b8188859f1143ba1ffa3de03d14ecc028c2..f9fdf3920624962b8d4b52f01459588716b35f43 100644
+--- a/src/responder/common/responder_cache_req.c
++++ b/src/responder/common/responder_cache_req.c
+@@ -520,8 +520,8 @@ static errno_t cache_req_get_object(TALLOC_CTX *mem_ctx,
+         break;
+     case CACHE_REQ_USER_BY_CERT:
+         one_item_only = true;
+-        ret = sysdb_search_user_by_cert(mem_ctx, input->domain,
+-                                        input->cert, &result);
++        ret = sysdb_search_user_by_cert_with_views(mem_ctx, input->domain,
++                                                   input->cert, &result);
+         break;
+     case CACHE_REQ_USER_BY_FILTER:
+         one_item_only = false;
+-- 
+2.14.3
+

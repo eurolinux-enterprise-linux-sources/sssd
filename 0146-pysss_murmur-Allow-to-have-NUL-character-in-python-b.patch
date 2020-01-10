@@ -1,0 +1,40 @@
+From 1a17eddd8c408142d41db74c523bd3f6956b8be9 Mon Sep 17 00:00:00 2001
+From: Lukas Slebodnik <lslebodn@redhat.com>
+Date: Wed, 24 Jan 2018 11:24:01 +0100
+Subject: [PATCH] pysss_murmur: Allow to have NUL character in python bindings
+
+Reviewed-by: Sumit Bose <sbose@redhat.com>
+(cherry picked from commit 41454a64c714e984423fd6e94ea89d183a73cc67)
+(cherry picked from commit a1a9988ce782d93665961600779eb9e42e5a9141)
+(cherry picked from commit 4b37adf6341cc63ed2c860a40962bfa77cb7fed0)
+---
+ src/python/pysss_murmur.c | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/src/python/pysss_murmur.c b/src/python/pysss_murmur.c
+index b14a672025c218ae3ab314c3ad2cf2c5ced40870..8d2dcc1415735fab8d30965b1a7dabd7444a51f7 100644
+--- a/src/python/pysss_murmur.c
++++ b/src/python/pysss_murmur.c
+@@ -36,15 +36,16 @@ static PyObject * py_murmurhash3(PyObject *module, PyObject *args)
+     long key_len;
+     long long seed;
+     uint32_t hash;
++    int input_len;
+ 
+-    if (!PyArg_ParseTuple(args, sss_py_const_p(char, "slL"),
+-                          &key, &key_len, &seed)) {
++    if (!PyArg_ParseTuple(args, sss_py_const_p(char, "z#lL"),
++                          &key, &input_len, &key_len, &seed)) {
+         PyErr_Format(PyExc_ValueError, "Invalid argument\n");
+         return NULL;
+     }
+ 
+     if (seed > UINT32_MAX || key_len > INT_MAX || key_len < 0 ||
+-        (size_t)key_len > strlen(key)) {
++        key_len > input_len) {
+         PyErr_Format(PyExc_ValueError, "Invalid value\n");
+         return NULL;
+     }
+-- 
+2.14.3
+

@@ -1,0 +1,66 @@
+From e284dbe04fc9e85601de3c422259ea9632428770 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Fabiano=20Fid=C3=AAncio?= <fidencio@redhat.com>
+Date: Wed, 13 Dec 2017 20:52:46 +0100
+Subject: [PATCH] IPA: Remove sshPublicKey attribute when it's not set
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Similary to what has been for the SSSD's server, we have to explicitly
+remove the 'sshPublicKey' attribute from an override in case it's not
+set, otherwise we may end up in a situation where a ssh key is removed
+from IPA but it'll still be present in the SSSD's client cache, allowing
+then users to ssh to a machine even having a key that has already been
+removed from IPA.
+
+Related: https://pagure.io/SSSD/sssd/issue/3602
+
+Signed-off-by: Fabiano Fidêncio <fidencio@redhat.com>
+
+Reviewed-by: Sumit Bose <sbose@redhat.com>
+(cherry picked from commit 56f015ef6a161e01681f79e4ea0d1b642f9737b4)
+(cherry picked from commit 6c564d20a021016cf8d08fea2c57f40590a71178)
+(cherry picked from commit 448cbbfa0284ecd88a9a8f900aa406fcd9d6fb1d)
+
+DOWNSTREAM:
+Related: rhbz#1442703 - Smart Cards: Certificate in the ID View
+---
+ src/providers/ipa/ipa_s2n_exop.c | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/src/providers/ipa/ipa_s2n_exop.c b/src/providers/ipa/ipa_s2n_exop.c
+index 22e99cbef805cdb3304afc70d767b4bf61fb7be9..cf6f0c6214c31a09e663e40140a969a2301039c7 100644
+--- a/src/providers/ipa/ipa_s2n_exop.c
++++ b/src/providers/ipa/ipa_s2n_exop.c
+@@ -1798,7 +1798,12 @@ static errno_t ipa_s2n_save_objects(struct sss_domain_info *dom,
+     char ** exop_grouplist;
+     struct ldb_message *msg;
+     struct ldb_message_element *el = NULL;
+-    const char *missing[] = {NULL, NULL};
++    /* The list of elements that might be missing are:
++     * - SYSDB_ORIG_MEMBEROF
++     * - SYSDB_SSH_PUBKEY
++     * Note that the list includes the trailing NULL at the end. */
++    size_t missing_count = 0;
++    const char *missing[] = {NULL, NULL, NULL};
+ 
+     tmp_ctx = talloc_new(NULL);
+     if (tmp_ctx == NULL) {
+@@ -2031,7 +2036,13 @@ static errno_t ipa_s2n_save_objects(struct sss_domain_info *dom,
+             ret = sysdb_attrs_get_el_ext(attrs->sysdb_attrs,
+                                          SYSDB_ORIG_MEMBEROF, false, &el);
+             if (ret == ENOENT) {
+-                missing[0] = SYSDB_ORIG_MEMBEROF;
++                missing[missing_count++] = SYSDB_ORIG_MEMBEROF;
++            }
++
++            ret = sysdb_attrs_get_el_ext(attrs->sysdb_attrs,
++                                         SYSDB_SSH_PUBKEY, false, &el);
++            if (ret == ENOENT) {
++                missing[missing_count++] = SYSDB_SSH_PUBKEY;
+             }
+ 
+             ret = sysdb_transaction_start(dom->sysdb);
+-- 
+2.14.3
+

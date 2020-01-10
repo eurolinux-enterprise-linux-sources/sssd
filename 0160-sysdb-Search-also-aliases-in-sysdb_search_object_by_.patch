@@ -1,0 +1,80 @@
+From 3a243d7466fae437415dd9b43eddf47beed89cbb Mon Sep 17 00:00:00 2001
+From: Lukas Slebodnik <lslebodn@redhat.com>
+Date: Sat, 21 Jan 2017 21:03:54 +0100
+Subject: [PATCH] sysdb: Search also aliases in sysdb_search_object_by_name
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+sysdb_search_object_by_name did not work well case insensitive domain.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3284
+
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit 8a4a2b87f51462ac22bf6db93927484841f098c6)
+(cherry picked from commit 64ef6ab9a432d6fdd231d5f96887ecabeb2fc39e)
+(cherry picked from commit 50841c025e20e7619ca342739e9beaa9dfb85f1c)
+---
+ src/db/sysdb.h     |  2 +-
+ src/db/sysdb_ops.c | 31 +++++++++++++++++++++++++++++--
+ 2 files changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/src/db/sysdb.h b/src/db/sysdb.h
+index a3bbc9c6167d6c8b643abc635a437968a9ba0b0e..156fc713771c2ef14fc20c9ad6fdb635ecc4ed0a 100644
+--- a/src/db/sysdb.h
++++ b/src/db/sysdb.h
+@@ -196,7 +196,7 @@
+ 
+ #define SYSDB_SID_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))("SYSDB_SID_STR"=%s))"
+ #define SYSDB_UUID_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))("SYSDB_UUID"=%s))"
+-#define SYSDB_NAME_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))("SYSDB_NAME"=%s))"
++#define SYSDB_NAME_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))(|("SYSDB_NAME_ALIAS"=%s)("SYSDB_NAME"=%s)))"
+ #define SYSDB_ID_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))(|("SYSDB_UIDNUM"=%u)("SYSDB_GIDNUM"=%u)))"
+ #define SYSDB_USER_CERT_FILTER "(&("SYSDB_UC")%s)"
+ 
+diff --git a/src/db/sysdb_ops.c b/src/db/sysdb_ops.c
+index fb058296d8490538f88b2722fabecdeb4e570616..b159c4785ac08e0096aeac6cc388a14dc5faaf12 100644
+--- a/src/db/sysdb_ops.c
++++ b/src/db/sysdb_ops.c
+@@ -3762,8 +3762,35 @@ errno_t sysdb_search_object_by_name(TALLOC_CTX *mem_ctx,
+                                     const char **attrs,
+                                     struct ldb_result **res)
+ {
+-    return sysdb_search_object_by_str_attr(mem_ctx, domain, SYSDB_NAME_FILTER,
+-                                           name, attrs, res);
++    TALLOC_CTX *tmp_ctx;
++    char *filter;
++    char *sanitized_name;
++    char *sanitized_alias_name;
++    errno_t ret;
++
++    tmp_ctx = talloc_new(NULL);
++    if (!tmp_ctx) {
++        return ENOMEM;
++    }
++
++    ret = sss_filter_sanitize_for_dom(tmp_ctx, name, domain, &sanitized_name,
++                                      &sanitized_alias_name);
++    if (ret != EOK) {
++        goto done;
++    }
++
++    filter = talloc_asprintf(tmp_ctx, SYSDB_NAME_FILTER, sanitized_alias_name,
++                             sanitized_name);
++    if (filter == NULL) {
++        ret = ENOMEM;
++        goto done;
++    }
++
++    ret = sysdb_search_object_attr(mem_ctx, domain, filter, attrs, res);
++
++done:
++    talloc_free(tmp_ctx);
++    return ret;
+ }
+ 
+ errno_t sysdb_search_object_by_sid(TALLOC_CTX *mem_ctx,
+-- 
+2.14.3
+

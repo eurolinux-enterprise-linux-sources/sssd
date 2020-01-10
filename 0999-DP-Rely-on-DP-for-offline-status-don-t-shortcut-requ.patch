@@ -1,0 +1,92 @@
+From 39cd213702a5196a44b59082e0ce4c79c8874534 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Sun, 18 Feb 2018 17:59:08 +0100
+Subject: [PATCH] DP: Rely on DP for offline status, don't shortcut requests in
+ back ends
+
+---
+ src/providers/ad/ad_id.c         |  4 ----
+ src/providers/data_provider_be.c | 13 ++++++-------
+ src/providers/ldap/ldap_id.c     |  4 ----
+ src/providers/proxy/proxy_id.c   |  4 ----
+ 4 files changed, 6 insertions(+), 19 deletions(-)
+
+diff --git a/src/providers/ad/ad_id.c b/src/providers/ad/ad_id.c
+index 815d6ac32..0a9819372 100644
+--- a/src/providers/ad/ad_id.c
++++ b/src/providers/ad/ad_id.c
+@@ -357,10 +357,6 @@ ad_account_info_handler(struct be_req *be_req)
+     ar = talloc_get_type(be_req_get_data(be_req), struct be_acct_req);
+     sdap_id_ctx = ad_ctx->sdap_id_ctx;
+ 
+-    if (be_is_offline(be_ctx)) {
+-        return be_req_terminate(be_req, DP_ERR_OFFLINE, EAGAIN, "Offline");
+-    }
+-
+     if (sdap_is_enum_request(ar)) {
+         DEBUG(SSSDBG_TRACE_LIBS, "Skipping enumeration on demand\n");
+         return sdap_handler_done(be_req, DP_ERR_OK, EOK, "Success");
+diff --git a/src/providers/data_provider_be.c b/src/providers/data_provider_be.c
+index 7ad911e92..c886653d6 100644
+--- a/src/providers/data_provider_be.c
++++ b/src/providers/data_provider_be.c
+@@ -1186,7 +1186,7 @@ static int be_get_account_info(struct sbus_request *dbus_req, void *user_data)
+     /* If we are offline and fast reply was requested
+      * return offline immediately
+      */
+-    if ((type & BE_REQ_FAST) && becli->bectx->offstat.offline) {
++    if ((type & BE_REQ_FAST) && be_is_offline(becli->bectx)) {
+         /* Send back an immediate reply */
+         err_maj = DP_ERR_OFFLINE;
+         err_min = EAGAIN;
+@@ -1205,12 +1205,11 @@ static int be_get_account_info(struct sbus_request *dbus_req, void *user_data)
+                   err_maj, err_min, err_msg);
+ 
+         dbus_req = NULL;
+-        /* This reply will be queued and sent
+-         * when we reenter the mainloop.
+-         *
+-         * Continue processing in case we are
+-         * going back online.
+-         */
++         /* Don't continue processing fast requests
++          * in offline mode, rely on mechanisms
++          * such as periodic go-online task
++          */
++        goto done;
+     }
+ 
+     be_req = be_req_create(becli, becli, becli->bectx,
+diff --git a/src/providers/ldap/ldap_id.c b/src/providers/ldap/ldap_id.c
+index 696384cb9..14198ae52 100644
+--- a/src/providers/ldap/ldap_id.c
++++ b/src/providers/ldap/ldap_id.c
+@@ -1755,10 +1755,6 @@ void sdap_handle_account_info(struct be_req *breq, struct sdap_id_ctx *ctx,
+     struct be_acct_req *ar;
+     struct tevent_req *req;
+ 
+-    if (be_is_offline(ctx->be)) {
+-        return sdap_handler_done(breq, DP_ERR_OFFLINE, EAGAIN, "Offline");
+-    }
+-
+     ar = talloc_get_type(be_req_get_data(breq), struct be_acct_req);
+     if (ar == NULL) {
+         return sdap_handler_done(breq, DP_ERR_FATAL,
+diff --git a/src/providers/proxy/proxy_id.c b/src/providers/proxy/proxy_id.c
+index 1b4e3e45f..ea321ed10 100644
+--- a/src/providers/proxy/proxy_id.c
++++ b/src/providers/proxy/proxy_id.c
+@@ -1381,10 +1381,6 @@ void proxy_get_account_info(struct be_req *breq)
+     sysdb = be_ctx->domain->sysdb;
+     domain = be_ctx->domain;
+ 
+-    if (be_is_offline(be_ctx)) {
+-        return be_req_terminate(breq, DP_ERR_OFFLINE, EAGAIN, "Offline");
+-    }
+-
+     /* for now we support only core attrs */
+     if (ar->attr_type != BE_ATTR_CORE) {
+         return be_req_terminate(breq, DP_ERR_FATAL, EINVAL, "Invalid attr type");
+-- 
+2.14.3
+

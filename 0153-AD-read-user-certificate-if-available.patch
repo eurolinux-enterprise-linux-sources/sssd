@@ -1,0 +1,28 @@
+From 687747b16902a7cef939e26c1487c72a175f2d7c Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 6 Apr 2016 18:10:48 +0200
+Subject: [PATCH] AD: read user certificate if available
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit ffe2522a208cddd415d7c3498dcc73ffda863b6f)
+(cherry picked from commit 35f9936d892fe0bda51ebc1db3c1a47e7d1a495f)
+---
+ src/providers/ad/ad_opts.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/providers/ad/ad_opts.c b/src/providers/ad/ad_opts.c
+index 1823202c4cb072e10601b64e97b55eecf7bfb39c..70d8ab094ca18e4ae318140df4cc6a9ca9a37a0b 100644
+--- a/src/providers/ad/ad_opts.c
++++ b/src/providers/ad/ad_opts.c
+@@ -218,7 +218,7 @@ struct sdap_attr_map ad_2008r2_user_map[] = {
+     { "ldap_user_nds_login_allowed_time_map", NULL, SYSDB_NDS_LOGIN_ALLOWED_TIME_MAP, NULL },
+     { "ldap_user_ssh_public_key", NULL, SYSDB_SSH_PUBKEY, NULL },
+     { "ldap_user_auth_type", NULL, SYSDB_AUTH_TYPE, NULL },
+-    { "ldap_user_certificate", NULL, SYSDB_USER_CERT, NULL },
++    { "ldap_user_certificate", "userCertificate;binary", SYSDB_USER_CERT, NULL },
+     SDAP_ATTR_MAP_TERMINATOR
+ };
+ 
+-- 
+2.14.3
+

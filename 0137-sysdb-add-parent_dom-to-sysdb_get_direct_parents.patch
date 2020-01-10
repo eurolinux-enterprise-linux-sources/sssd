@@ -1,0 +1,126 @@
+From b2555eb41160d646571409c72034eef4ab7706a0 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Tue, 18 Oct 2016 14:59:19 +0200
+Subject: [PATCH 137/140] sysdb: add parent_dom to sysdb_get_direct_parents()
+
+Currently sysdb_get_direct_parents() only return direct parents from the
+same domain as the child object. In setups with sub-domains this might
+not be sufficient. A new option parent_dom is added which allows to
+specify a domain the direct parents should be lookup up in. If it is
+NULL the whole cache is searched.
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 3dd4c3eca80e9223a65f3318821bd0fb5b45aedd)
+(cherry picked from commit 9a243dcdbf5a908d23c1a64f3fb33914eefef9e8)
+(cherry picked from commit 299e5b3c69c5f87edb21e6fe38c4528a98c3a90e)
+---
+ src/db/sysdb.h                             | 21 +++++++++++++++++++++
+ src/db/sysdb_search.c                      |  7 ++++++-
+ src/providers/ldap/sdap_async_initgroups.c | 11 +++++++----
+ 3 files changed, 34 insertions(+), 5 deletions(-)
+
+diff --git a/src/db/sysdb.h b/src/db/sysdb.h
+index 3c52c5b5186892d8bc254affc19ae65291a3d28a..186eeff6e35975de61c2eb3f3f1f0614b2c89dd7 100644
+--- a/src/db/sysdb.h
++++ b/src/db/sysdb.h
+@@ -1098,8 +1098,29 @@ errno_t sysdb_remove_attrs(struct sss_domain_info *domain,
+                            enum sysdb_member_type type,
+                            char **remove_attrs);
+ 
++/**
++ * @brief Return direct parents of an object in the cache
++ *
++ * @param[in]  mem_ctx         Memory context the result should be allocated
++ *                             on
++ * @param[in]  dom             domain the object is in
++ * @param[in]  parent_dom      domain which should be searched for direct
++ *                             parents if NULL all domains in the given cache
++ *                             are searched
++ * @param[in]  mtype           Type of the object, SYSDB_MEMBER_USER or
++ *                             SYSDB_MEMBER_GROUP
++ * @param[in]  name            Name of the object
++ * @param[out] _direct_parents List of names of the direct parent groups
++ *
++ *
++ * @return
++ *  - EOK:    success
++ *  - EINVAL: wrong mtype
++ *  - ENOMEM: Memory allocation failed
++ */
+ errno_t sysdb_get_direct_parents(TALLOC_CTX *mem_ctx,
+                                  struct sss_domain_info *dom,
++                                 struct sss_domain_info *parent_dom,
+                                  enum sysdb_member_type mtype,
+                                  const char *name,
+                                  char ***_direct_parents);
+diff --git a/src/db/sysdb_search.c b/src/db/sysdb_search.c
+index 4fb0f3fde6be1ea16cd9d1a0359a848daed99a41..484af390c4b2b7d32a42a8163af86c3ec02d3e94 100644
+--- a/src/db/sysdb_search.c
++++ b/src/db/sysdb_search.c
+@@ -1677,6 +1677,7 @@ done:
+ 
+ errno_t sysdb_get_direct_parents(TALLOC_CTX *mem_ctx,
+                                  struct sss_domain_info *dom,
++                                 struct sss_domain_info *parent_dom,
+                                  enum sysdb_member_type mtype,
+                                  const char *name,
+                                  char ***_direct_parents)
+@@ -1725,7 +1726,11 @@ errno_t sysdb_get_direct_parents(TALLOC_CTX *mem_ctx,
+         goto done;
+     }
+ 
+-    basedn = sysdb_group_base_dn(tmp_ctx, dom);
++    if (parent_dom == NULL) {
++        basedn = sysdb_base_dn(dom->sysdb, tmp_ctx);
++    } else {
++        basedn = sysdb_group_base_dn(tmp_ctx, parent_dom);
++    }
+     if (!basedn) {
+         ret = ENOMEM;
+         goto done;
+diff --git a/src/providers/ldap/sdap_async_initgroups.c b/src/providers/ldap/sdap_async_initgroups.c
+index 960df008230fb1c8614386b661b2a14faef6e8ba..2741815983953a365ff33ed6f1b07f6e9531f0cc 100644
+--- a/src/providers/ldap/sdap_async_initgroups.c
++++ b/src/providers/ldap/sdap_async_initgroups.c
+@@ -1278,7 +1278,8 @@ sdap_initgr_store_user_memberships(struct sdap_initgr_nested_state *state)
+         }
+     }
+ 
+-    ret = sysdb_get_direct_parents(tmp_ctx, state->dom, SYSDB_MEMBER_USER,
++    ret = sysdb_get_direct_parents(tmp_ctx, state->dom, state->dom,
++                                   SYSDB_MEMBER_USER,
+                                    state->username, &sysdb_parent_name_list);
+     if (ret) {
+         DEBUG(SSSDBG_CRIT_FAILURE,
+@@ -1365,7 +1366,7 @@ sdap_initgr_nested_get_membership_diff(TALLOC_CTX *mem_ctx,
+         goto done;
+     }
+ 
+-    ret = sysdb_get_direct_parents(tmp_ctx, dom, SYSDB_MEMBER_GROUP,
++    ret = sysdb_get_direct_parents(tmp_ctx, dom, dom, SYSDB_MEMBER_GROUP,
+                                    group_name, &sysdb_parents_names_list);
+     if (ret) {
+         DEBUG(SSSDBG_CRIT_FAILURE,
+@@ -2047,7 +2048,8 @@ rfc2307bis_group_memberships_build(hash_entry_t *item, void *user_data)
+         goto done;
+     }
+ 
+-    ret = sysdb_get_direct_parents(tmp_ctx, mstate->dom, SYSDB_MEMBER_GROUP,
++    ret = sysdb_get_direct_parents(tmp_ctx, mstate->dom, mstate->dom,
++                                   SYSDB_MEMBER_GROUP,
+                                    group_name, &sysdb_parents_names_list);
+     if (ret) {
+         DEBUG(SSSDBG_CRIT_FAILURE,
+@@ -2109,7 +2111,8 @@ errno_t save_rfc2307bis_user_memberships(
+     }
+     in_transaction = true;
+ 
+-    ret = sysdb_get_direct_parents(tmp_ctx, state->dom, SYSDB_MEMBER_USER,
++    ret = sysdb_get_direct_parents(tmp_ctx, state->dom, state->dom,
++                                   SYSDB_MEMBER_USER,
+                                    state->name, &sysdb_parent_name_list);
+     if (ret) {
+         DEBUG(SSSDBG_CRIT_FAILURE,
+-- 
+2.14.3
+

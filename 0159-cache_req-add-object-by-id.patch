@@ -1,0 +1,167 @@
+From a05f4ae7607c4de70dbc63e455179c1cb30301f9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pavel=20B=C5=99ezina?= <pbrezina@redhat.com>
+Date: Tue, 15 Nov 2016 15:15:35 +0100
+Subject: [PATCH] cache_req: add object by id
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This request returns either user or group object.
+
+Resolves:
+https://fedorahosted.org/sssd/ticket/3151
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit 3be2628d8aba6aeb99ac1484da990f1fad8169ec)
+Only sysdb changes were cherry picked from previous commit
+(cherry picked from commit f84055ee1c4ad60219e5d9b2ea5cc4dd6e1112eb)
+(cherry picked from commit 853ab167b05b61e3e174b575fbe2fc81abe24f02)
+
+DOWNSTREAM:
+Resolves: rhbz#1507435 - CVE-2017-12173 sssd: unsanitized input when searching in local cache database [rhel-6.10]
+---
+ src/db/sysdb.h     | 14 +++++++++++
+ src/db/sysdb_ops.c | 74 +++++++++++++++++++++++++++++++++++++++++++++---------
+ 2 files changed, 76 insertions(+), 12 deletions(-)
+
+diff --git a/src/db/sysdb.h b/src/db/sysdb.h
+index 1ed9f5604937aef7115b4c716810d917177e32e1..a3bbc9c6167d6c8b643abc635a437968a9ba0b0e 100644
+--- a/src/db/sysdb.h
++++ b/src/db/sysdb.h
+@@ -196,6 +196,8 @@
+ 
+ #define SYSDB_SID_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))("SYSDB_SID_STR"=%s))"
+ #define SYSDB_UUID_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))("SYSDB_UUID"=%s))"
++#define SYSDB_NAME_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))("SYSDB_NAME"=%s))"
++#define SYSDB_ID_FILTER "(&(|("SYSDB_UC")("SYSDB_GC"))(|("SYSDB_UIDNUM"=%u)("SYSDB_GIDNUM"=%u)))"
+ #define SYSDB_USER_CERT_FILTER "(&("SYSDB_UC")%s)"
+ 
+ #define SYSDB_HAS_ENUMERATED "has_enumerated"
+@@ -1170,6 +1172,18 @@ errno_t sysdb_idmap_get_mappings(TALLOC_CTX *mem_ctx,
+                                  struct sss_domain_info *domain,
+                                  struct ldb_result **_result);
+ 
++errno_t sysdb_search_object_by_id(TALLOC_CTX *mem_ctx,
++                                  struct sss_domain_info *domain,
++                                  uint32_t id,
++                                  const char **attrs,
++                                  struct ldb_result **res);
++
++errno_t sysdb_search_object_by_name(TALLOC_CTX *mem_ctx,
++                                    struct sss_domain_info *domain,
++                                    const char *name,
++                                    const char **attrs,
++                                    struct ldb_result **res);
++
+ errno_t sysdb_search_object_by_sid(TALLOC_CTX *mem_ctx,
+                                    struct sss_domain_info *domain,
+                                    const char *sid_str,
+diff --git a/src/db/sysdb_ops.c b/src/db/sysdb_ops.c
+index e7d2a48b386290e56cfae9fe52bd15e9c1da3052..fb058296d8490538f88b2722fabecdeb4e570616 100644
+--- a/src/db/sysdb_ops.c
++++ b/src/db/sysdb_ops.c
+@@ -3654,12 +3654,11 @@ done:
+     return ret;
+ }
+ 
+-static errno_t sysdb_search_object_by_str_attr(TALLOC_CTX *mem_ctx,
+-                                   struct sss_domain_info *domain,
+-                                   const char *filter_tmpl,
+-                                   const char *str,
+-                                   const char **attrs,
+-                                   struct ldb_result **_res)
++static errno_t sysdb_search_object_attr(TALLOC_CTX *mem_ctx,
++                                        struct sss_domain_info *domain,
++                                        const char *filter,
++                                        const char **attrs,
++                                        struct ldb_result **_res)
+ {
+     TALLOC_CTX *tmp_ctx;
+     const char *def_attrs[] = { SYSDB_NAME, SYSDB_UIDNUM, SYSDB_GIDNUM,
+@@ -3683,9 +3682,9 @@ static errno_t sysdb_search_object_by_str_attr(TALLOC_CTX *mem_ctx,
+         goto done;
+     }
+ 
+-    ret = ldb_search(domain->sysdb->ldb, tmp_ctx, &res,
+-                     basedn, LDB_SCOPE_SUBTREE, attrs?attrs:def_attrs,
+-                     filter_tmpl, str);
++    ret = ldb_search(domain->sysdb->ldb, tmp_ctx, &res, basedn,
++                     LDB_SCOPE_SUBTREE, attrs ? attrs : def_attrs,
++                     "%s", filter);
+     if (ret != EOK) {
+         ret = sysdb_error_to_errno(ret);
+         DEBUG(SSSDBG_OP_FAILURE, "ldb_search failed.\n");
+@@ -3693,9 +3692,9 @@ static errno_t sysdb_search_object_by_str_attr(TALLOC_CTX *mem_ctx,
+     }
+ 
+     if (res->count > 1) {
+-        DEBUG(SSSDBG_CRIT_FAILURE, "Search for [%s]  with filter [%s] " \
+-                                   "returned more than one object.\n",
+-                                   str, filter_tmpl);
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "Search with filter [%s] returned more than one object.\n",
++              filter);
+         ret = EINVAL;
+         goto done;
+     } else if (res->count == 0) {
+@@ -3716,6 +3715,57 @@ done:
+     return ret;
+ }
+ 
++static errno_t sysdb_search_object_by_str_attr(TALLOC_CTX *mem_ctx,
++                                               struct sss_domain_info *domain,
++                                               const char *filter_tmpl,
++                                               const char *str,
++                                               const char **attrs,
++                                               struct ldb_result **_res)
++{
++    char *filter;
++    errno_t ret;
++
++    filter = talloc_asprintf(NULL, filter_tmpl, str);
++    if (filter == NULL) {
++        return ENOMEM;
++    }
++
++    ret = sysdb_search_object_attr(mem_ctx, domain, filter, attrs, _res);
++
++    talloc_free(filter);
++    return ret;
++}
++
++errno_t sysdb_search_object_by_id(TALLOC_CTX *mem_ctx,
++                                  struct sss_domain_info *domain,
++                                  uint32_t id,
++                                  const char **attrs,
++                                  struct ldb_result **res)
++{
++    char *filter;
++    errno_t ret;
++
++    filter = talloc_asprintf(NULL, SYSDB_ID_FILTER, id, id);
++    if (filter == NULL) {
++        return ENOMEM;
++    }
++
++    ret = sysdb_search_object_attr(mem_ctx, domain, filter, attrs, res);
++
++    talloc_free(filter);
++    return ret;
++}
++
++errno_t sysdb_search_object_by_name(TALLOC_CTX *mem_ctx,
++                                    struct sss_domain_info *domain,
++                                    const char *name,
++                                    const char **attrs,
++                                    struct ldb_result **res)
++{
++    return sysdb_search_object_by_str_attr(mem_ctx, domain, SYSDB_NAME_FILTER,
++                                           name, attrs, res);
++}
++
+ errno_t sysdb_search_object_by_sid(TALLOC_CTX *mem_ctx,
+                                    struct sss_domain_info *domain,
+                                    const char *sid_str,
+-- 
+2.14.3
+

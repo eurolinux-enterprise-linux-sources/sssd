@@ -1,0 +1,35 @@
+From 2d57fa9e8f5ec0ce1cc397d6d315bc8abcedea49 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 6 Apr 2016 11:18:38 +0200
+Subject: [PATCH] nss: include certificates in full result list
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit dc936929c01647c0fc116a112cee200156328037)
+(cherry picked from commit b7f2686bde219ae2ddd9398901a4b3e9cdde2ab1)
+---
+ src/responder/nss/nsssrv_cmd.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/responder/nss/nsssrv_cmd.c b/src/responder/nss/nsssrv_cmd.c
+index 61e961efcab77745e669977bc39470be5c96efdc..a6f4ca90f25e408c41cc1bfc94a7ecb85e68bc76 100644
+--- a/src/responder/nss/nsssrv_cmd.c
++++ b/src/responder/nss/nsssrv_cmd.c
+@@ -4510,6 +4510,7 @@ static errno_t nss_cmd_getsidby_search(struct nss_dom_ctx *dctx)
+                                    SYSDB_AD_ACCOUNT_EXPIRES,
+                                    SYSDB_AD_USER_ACCOUNT_CONTROL,
+                                    SYSDB_SSH_PUBKEY,
++                                   SYSDB_USER_CERT,
+                                    SYSDB_ORIG_DN,
+                                    SYSDB_ORIG_MEMBEROF,
+                                    SYSDB_DEFAULT_ATTRS, NULL};
+@@ -5079,6 +5080,7 @@ static errno_t fill_orig(struct sss_packet *packet,
+                                     SYSDB_AD_ACCOUNT_EXPIRES,
+                                     SYSDB_AD_USER_ACCOUNT_CONTROL,
+                                     SYSDB_SSH_PUBKEY,
++                                    SYSDB_USER_CERT,
+                                     SYSDB_ORIG_DN,
+                                     SYSDB_ORIG_MEMBEROF,
+                                     NULL};
+-- 
+2.14.3
+

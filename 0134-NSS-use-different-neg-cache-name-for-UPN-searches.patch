@@ -1,0 +1,61 @@
+From 58c3a6612453946f175193592ad662a190cd37b8 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Fri, 22 Jul 2016 16:01:38 +0200
+Subject: [PATCH 134/140] NSS: use different neg cache name for UPN searches
+
+If Kerberos principals or email address have the same domain suffix as
+the domain itself the first user lookup by name might have already added
+the name to the negative cache and the second lookup by UPN/email will
+skip the domain because of the neg cache entry. To avoid this a special
+name with a '@' prefix is used here.
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 62df78512145db94b51c5573d4df1737197e368a)
+(cherry picked from commit 7f95edc43d9fc410aab5712552e17f28932ba344)
+---
+ src/responder/nss/nsssrv_cmd.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/src/responder/nss/nsssrv_cmd.c b/src/responder/nss/nsssrv_cmd.c
+index 262486ac544b15d41e6b2a618a51f1ee009ae127..61e961efcab77745e669977bc39470be5c96efdc 100644
+--- a/src/responder/nss/nsssrv_cmd.c
++++ b/src/responder/nss/nsssrv_cmd.c
+@@ -974,6 +974,7 @@ static int nss_cmd_getpwnam_search(struct nss_dom_ctx *dctx)
+     static const char *user_attrs[] = SYSDB_PW_ATTRS;
+     struct ldb_message *msg;
+     const char *extra_flag = NULL;
++    char *neg_cache_name;
+ 
+     nctx = talloc_get_type(cctx->rctx->pvt_ctx, struct nss_ctx);
+ 
+@@ -1008,10 +1009,16 @@ static int nss_cmd_getpwnam_search(struct nss_dom_ctx *dctx)
+             return ENOMEM;
+         }
+ 
++        if (cmdctx->name_is_upn) {
++            neg_cache_name = talloc_asprintf(name, "@%s", name);
++        } else {
++            neg_cache_name = name;
++        }
++
+         /* verify this user has not yet been negatively cached,
+         * or has been permanently filtered */
+         ret = sss_ncache_check_user(nctx->ncache, nctx->neg_timeout,
+-                                    dom, name);
++                                    dom, neg_cache_name);
+ 
+         /* if neg cached, return we didn't find it */
+         if (ret == EEXIST) {
+@@ -1092,7 +1099,8 @@ static int nss_cmd_getpwnam_search(struct nss_dom_ctx *dctx)
+ 
+         if (dctx->res->count == 0 && !dctx->check_provider) {
+             /* set negative cache only if not result of cache check */
+-            ret = sss_ncache_set_user(nctx->ncache, false, dom, name);
++            ret = sss_ncache_set_user(nctx->ncache, false, dom,
++                                      neg_cache_name);
+             if (ret != EOK) {
+                 DEBUG(SSSDBG_MINOR_FAILURE, "Cannot set negcache for %s@%s\n",
+                       name, dom->name);
+-- 
+2.14.3
+

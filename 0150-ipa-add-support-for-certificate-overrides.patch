@@ -1,0 +1,116 @@
+From 5e0bae83d0ce60d85239ac2547bf1cac3aabc49a Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 6 Apr 2016 11:15:32 +0200
+Subject: [PATCH] ipa: add support for certificate overrides
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit a1210c8db81a1cc0b45eb62a8450abcdea3afc7b)
+(cherry picked from commit 28fbcec499b12d3032590182adf8b09a60f518f1)
+---
+ src/providers/ipa/ipa_common.h        |  1 +
+ src/providers/ipa/ipa_opts.c          |  1 +
+ src/providers/ipa/ipa_subdomains_id.c |  6 ++++++
+ src/providers/ipa/ipa_views.c         | 25 +++++++++++++++++++++++++
+ 4 files changed, 33 insertions(+)
+
+diff --git a/src/providers/ipa/ipa_common.h b/src/providers/ipa/ipa_common.h
+index d1688bb6a226cd45318dd22380d0ff73d9b2ec47..51de819c8471d2575495bd5349d19eb46d41d54b 100644
+--- a/src/providers/ipa/ipa_common.h
++++ b/src/providers/ipa/ipa_common.h
+@@ -129,6 +129,7 @@ enum ipa_override_attrs {
+     IPA_AT_OVERRIDE_GROUP_NAME,
+     IPA_AT_OVERRIDE_GROUP_GID_NUMBER,
+     IPA_AT_OVERRIDE_USER_SSH_PUBLIC_KEY,
++    IPA_AT_OVERRIDE_USER_CERT,
+ 
+     IPA_OPTS_OVERRIDE
+ };
+diff --git a/src/providers/ipa/ipa_opts.c b/src/providers/ipa/ipa_opts.c
+index 99b057a02fb3c433cbbd8b55ca2a00e19b4243b5..7fffd58402f3de61bf8d97f491c99b98b98de030 100644
+--- a/src/providers/ipa/ipa_opts.c
++++ b/src/providers/ipa/ipa_opts.c
+@@ -288,6 +288,7 @@ struct sdap_attr_map ipa_override_map[] = {
+     { "ldap_group_name", "cn", SYSDB_NAME, NULL },
+     { "ldap_group_gid_number", "gidNumber", SYSDB_GIDNUM, NULL },
+     { "ldap_user_ssh_public_key", "ipaSshPubKey", SYSDB_SSH_PUBKEY, NULL },
++    { "ldap_user_certificate", "userCertificate;binary", SYSDB_USER_CERT, NULL },
+     SDAP_ATTR_MAP_TERMINATOR
+ };
+ 
+diff --git a/src/providers/ipa/ipa_subdomains_id.c b/src/providers/ipa/ipa_subdomains_id.c
+index 1f965ae0c5c9fac13344cea2b8705d5c280862d6..0050925b30ef364c698fe96244789c6ad68e03aa 100644
+--- a/src/providers/ipa/ipa_subdomains_id.c
++++ b/src/providers/ipa/ipa_subdomains_id.c
+@@ -397,6 +397,7 @@ struct tevent_req *ipa_get_subdom_acct_send(TALLOC_CTX *memctx,
+         case BE_REQ_USER:
+         case BE_REQ_GROUP:
+         case BE_REQ_BY_SECID:
++        case BE_REQ_BY_CERT:
+         case BE_REQ_USER_AND_GROUP:
+         case BE_REQ_INITGROUPS:
+             ret = EOK;
+@@ -490,6 +491,11 @@ static void ipa_get_subdom_acct_connected(struct tevent_req *subreq)
+                 return;
+             }
+             break;
++        case BE_FILTER_CERT:
++            DEBUG(SSSDBG_OP_FAILURE, "Lookup by certificate not supported yet.\n");
++            state->dp_error = dp_error;
++            tevent_req_error(req, EINVAL);
++            return;
+         default:
+             DEBUG(SSSDBG_OP_FAILURE, "Invalid sub-domain filter type.\n");
+             state->dp_error = dp_error;
+diff --git a/src/providers/ipa/ipa_views.c b/src/providers/ipa/ipa_views.c
+index 00dcbeb751a4ed63bedd8642bbc87a5226d28d34..76528a60c1e2ce666710e2d7653531d6d075cdc1 100644
+--- a/src/providers/ipa/ipa_views.c
++++ b/src/providers/ipa/ipa_views.c
+@@ -24,6 +24,7 @@
+ 
+ #include "util/util.h"
+ #include "util/strtonum.h"
++#include "util/cert.h"
+ #include "providers/ldap/sdap_async.h"
+ #include "providers/ipa/ipa_id.h"
+ 
+@@ -35,6 +36,8 @@ static errno_t be_acct_req_to_override_filter(TALLOC_CTX *mem_ctx,
+     char *filter;
+     uint32_t id;
+     char *endptr;
++    char *cert_filter;
++    int ret;
+ 
+     switch (ar->filter_type) {
+     case BE_FILTER_NAME:
+@@ -140,6 +143,28 @@ static errno_t be_acct_req_to_override_filter(TALLOC_CTX *mem_ctx,
+         }
+         break;
+ 
++    case BE_FILTER_CERT:
++        if ((ar->entry_type & BE_REQ_TYPE_MASK) == BE_REQ_BY_CERT) {
++            ret = sss_cert_derb64_to_ldap_filter(mem_ctx, ar->filter_value,
++                         ipa_opts->override_map[IPA_AT_OVERRIDE_USER_CERT].name,
++                         &cert_filter);
++            if (ret != EOK) {
++                DEBUG(SSSDBG_OP_FAILURE,
++                      "sss_cert_derb64_to_ldap_filter failed.\n");
++                return ret;
++            }
++            filter = talloc_asprintf(mem_ctx, "(&(objectClass=%s)%s)",
++                        ipa_opts->override_map[IPA_OC_OVERRIDE_USER].name,
++                        cert_filter);
++            talloc_free(cert_filter);
++        } else {
++            DEBUG(SSSDBG_CRIT_FAILURE,
++                  "Unexpected entry type [%d] for certificate filter.\n",
++                  ar->entry_type);
++            return EINVAL;
++        }
++        break;
++
+     default:
+         DEBUG(SSSDBG_OP_FAILURE, "Invalid sub-domain filter type.\n");
+         return EINVAL;
+-- 
+2.14.3
+

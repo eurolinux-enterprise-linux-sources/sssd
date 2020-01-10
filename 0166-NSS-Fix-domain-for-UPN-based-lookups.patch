@@ -1,0 +1,72 @@
+From 5bf8a8b68f09548158afffc35c13f3b2d8fc69a6 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 29 Jun 2016 14:02:02 +0200
+Subject: [PATCH] NSS: Fix domain for UPN based lookups
+
+Since sysdb_search_user_by_upn() searches the whole cache we have to set
+the domain so that it matches the result.
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit f426a8b81a871188348b41aa52803a05bc3a02de)
+(cherry picked from commit 42dbd7ee691ffef8b136fc310128aadfd91fd70c)
+---
+ src/responder/nss/nsssrv_cmd.c | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/src/responder/nss/nsssrv_cmd.c b/src/responder/nss/nsssrv_cmd.c
+index ef6f06145a06deabea86011a9c3072712c49d8c4..987d0fe9b73add2bfcee08530a489d7349d7ed84 100644
+--- a/src/responder/nss/nsssrv_cmd.c
++++ b/src/responder/nss/nsssrv_cmd.c
+@@ -978,6 +978,7 @@ static int nss_cmd_getpwnam_search(struct nss_dom_ctx *dctx)
+     struct ldb_message *msg;
+     const char *extra_flag = NULL;
+     char *neg_cache_name;
++    const char *sysdb_name;
+ 
+     nctx = talloc_get_type(cctx->rctx->pvt_ctx, struct nss_ctx);
+ 
+@@ -1080,6 +1081,23 @@ static int nss_cmd_getpwnam_search(struct nss_dom_ctx *dctx)
+                 }
+ 
+                 dctx->res->msgs[0] = talloc_steal(dctx->res->msgs, msg);
++
++                /* Since sysdb_search_user_by_upn() searches the whole cache we
++                 * have to set the domain so that it matches the result. */
++                sysdb_name = ldb_msg_find_attr_as_string(dctx->res->msgs[0],
++                                                         SYSDB_NAME, NULL);
++                if (sysdb_name == NULL) {
++                    DEBUG(SSSDBG_CRIT_FAILURE, "Cached entry has no name.\n");
++                    return EINVAL;
++                }
++                dctx->domain = find_domain_by_object_name(get_domains_head(dom),
++                                                          sysdb_name);
++                if (dctx->domain == NULL) {
++                    DEBUG(SSSDBG_CRIT_FAILURE,
++                          "Cannot find matching domain for [%s].\n",
++                          sysdb_name);
++                    return EINVAL;
++                }
+             }
+         } else {
+             ret = sysdb_getpwnam_with_views(cmdctx, dom, name, &dctx->res);
+@@ -4409,6 +4427,17 @@ static int nss_cmd_initgroups_search(struct nss_dom_ctx *dctx)
+                     return EINVAL;
+                 }
+ 
++                /* Since sysdb_search_user_by_upn() searches the whole cache we
++                 * have to set the domain so that it matches the result. */
++                dctx->domain = find_domain_by_object_name(get_domains_head(dom),
++                                                          sysdb_name);
++                if (dctx->domain == NULL) {
++                    DEBUG(SSSDBG_CRIT_FAILURE,
++                          "Cannot find matching domain for [%s].\n",
++                          sysdb_name);
++                    return EINVAL;
++                }
++
+                 ret = sysdb_initgroups(cmdctx, dom, sysdb_name, &dctx->res);
+                 if (ret == EOK && DOM_HAS_VIEWS(dom)) {
+                     for (c = 0; c < dctx->res->count; c++) {
+-- 
+2.14.3
+

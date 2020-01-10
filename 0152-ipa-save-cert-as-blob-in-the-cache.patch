@@ -1,0 +1,58 @@
+From edfbd8dc313915382130aa95092ab0d5148b7cae Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 6 Apr 2016 18:07:37 +0200
+Subject: [PATCH] ipa: save cert as blob in the cache
+
+The IPA extdom plugin returns the user certificate base64 encoded.
+Before the IPA client can store it in the cache it must be decoded so
+that it is stored as a binary as the certificate from other sources.
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit cf89f552f06b95bd69d8c61aaa55a330a5d9f6e6 with
+backport fixes)
+(cherry picked from commit 377786542b19ad4227f7447a0995ac5be8bf4a54)
+---
+ src/providers/ipa/ipa_s2n_exop.c | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/src/providers/ipa/ipa_s2n_exop.c b/src/providers/ipa/ipa_s2n_exop.c
+index 1d233cd52c18b4b6ed753bd92d186ac02ed2cb80..676b55f37fda45387009bce7aabb546118e38de0 100644
+--- a/src/providers/ipa/ipa_s2n_exop.c
++++ b/src/providers/ipa/ipa_s2n_exop.c
+@@ -22,6 +22,8 @@
+ #include "util/util.h"
+ #include "util/sss_nss.h"
+ #include "db/sysdb.h"
++#include "util/strtonum.h"
++#include "util/crypto/sss_crypto.h"
+ #include "providers/ldap/sdap_async_private.h"
+ #include "providers/ldap/ldap_common.h"
+ #include "providers/ipa/ipa_id.h"
+@@ -493,8 +495,22 @@ static errno_t get_extra_attrs(BerElement *ber, struct resp_attrs *resp_attrs)
+ 
+         for (c = 0; values[c] != NULL; c++) {
+ 
+-            v.data = (uint8_t *) values[c]->bv_val;
+-            v.length = values[c]->bv_len;
++            if (strcmp(name, SYSDB_USER_CERT) == 0) {
++                if (values[c]->bv_val[values[c]->bv_len] != '\0') {
++                    DEBUG(SSSDBG_OP_FAILURE,
++                          "base64 encoded certificate not 0-terminated.\n");
++                    return EINVAL;
++                }
++
++                v.data = sss_base64_decode(NULL, values[c]->bv_val, &v.length);
++                if (v.data == NULL) {
++                    DEBUG(SSSDBG_OP_FAILURE, "sss_base64_decode failed.\n");
++                    return EINVAL;
++                }
++            } else {
++                v.data = (uint8_t *)values[c]->bv_val;
++                v.length = values[c]->bv_len;
++            }
+ 
+             ret = sysdb_attrs_add_val(resp_attrs->sysdb_attrs, name, &v);
+             if (ret != EOK) {
+-- 
+2.14.3
+

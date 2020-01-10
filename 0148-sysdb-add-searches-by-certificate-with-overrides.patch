@@ -1,0 +1,271 @@
+From fe63a3518875a69ba40369baaa5c3e3f922ebc24 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 6 Apr 2016 11:12:30 +0200
+Subject: [PATCH] sysdb: add searches by certificate with overrides
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 6cb34580ee6e9e2c9190b77b10db8a3c43e3c9c8)
+(cherry picked from commit 95b7cee1fb67b4f2da4c5a8345ccfbb0a2de8755)
+---
+ src/db/sysdb.h        |  12 ++++++
+ src/db/sysdb_search.c |  67 +++++++++++++++++++++++++++++++++
+ src/db/sysdb_views.c  | 102 +++++++++++++++++++++++++++++++++++++++++++++++++-
+ 3 files changed, 180 insertions(+), 1 deletion(-)
+
+diff --git a/src/db/sysdb.h b/src/db/sysdb.h
+index 8cd8a20379781d394e4ec23d297470e70e131ada..2f75aa5bf33942b124910e86f15d74e91522ce8d 100644
+--- a/src/db/sysdb.h
++++ b/src/db/sysdb.h
+@@ -544,6 +544,13 @@ errno_t sysdb_search_group_override_by_gid(TALLOC_CTX *mem_ctx,
+                                             struct ldb_result **override_obj,
+                                             struct ldb_result **orig_obj);
+ 
++errno_t sysdb_search_override_by_cert(TALLOC_CTX *mem_ctx,
++                                      struct sss_domain_info *domain,
++                                      const char *cert,
++                                      const char **attrs,
++                                      struct ldb_result **override_obj,
++                                      struct ldb_result **orig_obj);
++
+ errno_t sysdb_add_overrides_to_object(struct sss_domain_info *domain,
+                                       struct ldb_message *obj,
+                                       struct ldb_message *override_obj,
+@@ -722,6 +729,11 @@ int sysdb_get_user_attr_with_views(TALLOC_CTX *mem_ctx,
+                                    const char **attributes,
+                                    struct ldb_result **res);
+ 
++int sysdb_search_user_by_cert_with_views(TALLOC_CTX *mem_ctx,
++                                         struct sss_domain_info *domain,
++                                         const char *cert,
++                                         struct ldb_result **res);
++
+ int sysdb_get_netgroup_attr(TALLOC_CTX *mem_ctx,
+                             struct sss_domain_info *domain,
+                             const char *netgrname,
+diff --git a/src/db/sysdb_search.c b/src/db/sysdb_search.c
+index 484af390c4b2b7d32a42a8163af86c3ec02d3e94..8fd59cceef6015a45ccda1fb79399a50c363c2ea 100644
+--- a/src/db/sysdb_search.c
++++ b/src/db/sysdb_search.c
+@@ -1858,3 +1858,70 @@ done:
+     talloc_free(tmp_ctx);
+     return ret;
+ }
++
++int sysdb_search_user_by_cert_with_views(TALLOC_CTX *mem_ctx,
++                                         struct sss_domain_info *domain,
++                                         const char *cert,
++                                         struct ldb_result **res)
++{
++    TALLOC_CTX *tmp_ctx;
++    int ret;
++    struct ldb_result *orig_obj = NULL;
++    struct ldb_result *override_obj = NULL;
++    const char *attrs[] = SYSDB_PW_ATTRS;
++
++    tmp_ctx = talloc_new(NULL);
++    if (!tmp_ctx) {
++        return ENOMEM;
++    }
++
++    /* If there are views we first have to search the overrides for matches */
++    if (DOM_HAS_VIEWS(domain)) {
++        ret = sysdb_search_override_by_cert(tmp_ctx, domain, cert, attrs,
++                                            &override_obj, &orig_obj);
++        if (ret != EOK && ret != ENOENT) {
++            DEBUG(SSSDBG_OP_FAILURE,
++                  "sysdb_search_override_by_cert failed.\n");
++            goto done;
++        }
++    }
++
++    /* If there are no views or nothing was found in the overrides the
++     * original objects are searched. */
++    if (orig_obj == NULL) {
++        ret = sysdb_search_user_by_cert(tmp_ctx, domain, cert, &orig_obj);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE, "sysdb_search_user_by_cert failed.\n");
++            goto done;
++        }
++    }
++
++    /* If there are views we have to check if override values must be added to
++     * the original object. */
++    if (DOM_HAS_VIEWS(domain) && orig_obj->count == 1) {
++        ret = sysdb_add_overrides_to_object(domain, orig_obj->msgs[0],
++                          override_obj == NULL ? NULL : override_obj->msgs[0],
++                          NULL);
++        if (ret == ENOENT) {
++            *res = talloc_zero(mem_ctx, struct ldb_result);
++            if (*res == NULL) {
++                DEBUG(SSSDBG_OP_FAILURE, "talloc_zero failed.\n");
++                ret = ENOMEM;
++            } else {
++                ret = EOK;
++            }
++            goto done;
++        } else if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE, "sysdb_add_overrides_to_object failed.\n");
++            goto done;
++        }
++    }
++
++    *res = talloc_steal(mem_ctx, orig_obj);
++    ret = EOK;
++
++done:
++
++    talloc_free(tmp_ctx);
++    return ret;
++}
+diff --git a/src/db/sysdb_views.c b/src/db/sysdb_views.c
+index 30e0c07ea8037e6f9af687930a3a921100c796fc..323fd98267ca575f5387c9d0ae70930bf34a8d59 100644
+--- a/src/db/sysdb_views.c
++++ b/src/db/sysdb_views.c
+@@ -20,6 +20,7 @@
+ */
+ 
+ #include "util/util.h"
++#include "util/cert.h"
+ #include "db/sysdb_private.h"
+ 
+ /* In general is should not be possible that there is a view container without
+@@ -736,6 +737,7 @@ errno_t sysdb_apply_default_override(struct sss_domain_info *domain,
+                                     SYSDB_SHELL,
+                                     SYSDB_NAME,
+                                     SYSDB_SSH_PUBKEY,
++                                    SYSDB_USER_CERT,
+                                     NULL };
+     bool override_attrs_found = false;
+ 
+@@ -781,8 +783,10 @@ errno_t sysdb_apply_default_override(struct sss_domain_info *domain,
+                 }
+             } else {
+                 num_values = el->num_values;
+-                /* Only SYSDB_SSH_PUBKEY is allowed to have multiple values. */
++                /* Only SYSDB_SSH_PUBKEY and SYSDB_USER_CERT are allowed to
++                 * have multiple values. */
+                 if (strcmp(allowed_attrs[c], SYSDB_SSH_PUBKEY) != 0
++                        && strcmp(allowed_attrs[c], SYSDB_USER_CERT) != 0
+                         && num_values != 1) {
+                     DEBUG(SSSDBG_MINOR_FAILURE,
+                           "Override attribute for [%s] has more [%zd] " \
+@@ -835,6 +839,7 @@ done:
+ 
+ #define SYSDB_USER_NAME_OVERRIDE_FILTER "(&(objectClass="SYSDB_OVERRIDE_USER_CLASS")(|("SYSDB_NAME_ALIAS"=%s)("SYSDB_NAME_ALIAS"=%s)("SYSDB_NAME"=%s)))"
+ #define SYSDB_USER_UID_OVERRIDE_FILTER "(&(objectClass="SYSDB_OVERRIDE_USER_CLASS")("SYSDB_UIDNUM"=%lu))"
++#define SYSDB_USER_CERT_OVERIDE_FILTER "(&(objectClass="SYSDB_OVERRIDE_USER_CLASS")%s)"
+ #define SYSDB_GROUP_NAME_OVERRIDE_FILTER "(&(objectClass="SYSDB_OVERRIDE_GROUP_CLASS")(|("SYSDB_NAME_ALIAS"=%s)("SYSDB_NAME_ALIAS"=%s)("SYSDB_NAME"=%s)))"
+ #define SYSDB_GROUP_GID_OVERRIDE_FILTER "(&(objectClass="SYSDB_OVERRIDE_GROUP_CLASS")("SYSDB_GIDNUM"=%lu))"
+ 
+@@ -844,6 +849,100 @@ enum override_object_type {
+     OO_TYPE_GROUP
+ };
+ 
++errno_t sysdb_search_override_by_cert(TALLOC_CTX *mem_ctx,
++                                      struct sss_domain_info *domain,
++                                      const char *cert,
++                                      const char **attrs,
++                                      struct ldb_result **override_obj,
++                                      struct ldb_result **orig_obj)
++{
++    TALLOC_CTX *tmp_ctx;
++    struct ldb_dn *base_dn;
++    struct ldb_result *override_res;
++    struct ldb_result *orig_res;
++    char *cert_filter;
++    int ret;
++    const char *orig_obj_dn;
++
++    tmp_ctx = talloc_new(NULL);
++    if (!tmp_ctx) {
++        return ENOMEM;
++    }
++
++    base_dn = ldb_dn_new_fmt(tmp_ctx, domain->sysdb->ldb,
++                             SYSDB_TMPL_VIEW_SEARCH_BASE, domain->view_name);
++    if (base_dn == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "ldb_dn_new_fmt failed.\n");
++        ret = ENOMEM;
++        goto done;
++    }
++
++    ret = sss_cert_derb64_to_ldap_filter(tmp_ctx, cert, SYSDB_USER_CERT,
++                                         &cert_filter);
++
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE, "sss_cert_derb64_to_ldap_filter failed.\n");
++        goto done;
++    }
++
++    ret = ldb_search(domain->sysdb->ldb, tmp_ctx, &override_res, base_dn,
++                     LDB_SCOPE_SUBTREE, attrs, SYSDB_USER_CERT_OVERIDE_FILTER,
++                     cert_filter);
++    if (ret != LDB_SUCCESS) {
++        ret = sysdb_error_to_errno(ret);
++        goto done;
++    }
++
++    if (override_res->count == 0) {
++        DEBUG(SSSDBG_TRACE_FUNC, "No user override found for cert [%s].\n",
++                                 cert);
++        ret = ENOENT;
++        goto done;
++    } else if (override_res->count > 1) {
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "Found more than one override for cert [%s].\n", cert);
++        ret = EINVAL;
++        goto done;
++    }
++
++    if (orig_obj != NULL) {
++        orig_obj_dn = ldb_msg_find_attr_as_string(override_res->msgs[0],
++                                                  SYSDB_OVERRIDE_OBJECT_DN,
++                                                  NULL);
++        if (orig_obj_dn == NULL) {
++            DEBUG(SSSDBG_CRIT_FAILURE,
++                  "Missing link to original object in override [%s].\n",
++                  ldb_dn_get_linearized(override_res->msgs[0]->dn));
++            ret = EINVAL;
++            goto done;
++        }
++
++        base_dn = ldb_dn_new(tmp_ctx, domain->sysdb->ldb, orig_obj_dn);
++        if (base_dn == NULL) {
++            DEBUG(SSSDBG_OP_FAILURE, "ldb_dn_new failed.\n");
++            ret = ENOMEM;
++            goto done;
++        }
++
++        ret = ldb_search(domain->sysdb->ldb, tmp_ctx, &orig_res, base_dn,
++                         LDB_SCOPE_BASE, attrs, NULL);
++        if (ret != LDB_SUCCESS) {
++            ret = sysdb_error_to_errno(ret);
++            goto done;
++        }
++
++        *orig_obj = talloc_steal(mem_ctx, orig_res);
++    }
++
++    *override_obj = talloc_steal(mem_ctx, override_res);
++
++    ret = EOK;
++
++done:
++    talloc_zfree(tmp_ctx);
++    return ret;
++}
++
+ static errno_t sysdb_search_override_by_name(TALLOC_CTX *mem_ctx,
+                                              struct sss_domain_info *domain,
+                                              const char *name,
+@@ -1170,6 +1269,7 @@ errno_t sysdb_add_overrides_to_object(struct sss_domain_info *domain,
+         {SYSDB_SHELL, OVERRIDE_PREFIX SYSDB_SHELL},
+         {SYSDB_NAME, OVERRIDE_PREFIX SYSDB_NAME},
+         {SYSDB_SSH_PUBKEY, OVERRIDE_PREFIX SYSDB_SSH_PUBKEY},
++        {SYSDB_USER_CERT, OVERRIDE_PREFIX SYSDB_USER_CERT},
+         {NULL, NULL}
+     };
+     size_t c;
+-- 
+2.14.3
+

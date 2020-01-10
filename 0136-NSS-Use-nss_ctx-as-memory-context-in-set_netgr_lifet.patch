@@ -1,7 +1,7 @@
-From 5eceddb1563de303d1f1447ac230a77d9ee9cf51 Mon Sep 17 00:00:00 2001
+From e02c4f8d4ef2896d87365bf1708706eb2f52fe86 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Fabiano=20Fid=C3=AAncio?= <fidencio@redhat.com>
 Date: Mon, 6 Nov 2017 17:13:14 +0100
-Subject: [PATCH 131/131] NSS: Use nss_ctx as memory context in
+Subject: [PATCH 136/140] NSS: Use nss_ctx as memory context in
  set_netgr_lifetime()
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

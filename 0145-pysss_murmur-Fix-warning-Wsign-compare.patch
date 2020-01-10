@@ -1,0 +1,51 @@
+From 60189454f9e94a6d1f2c0af7f81595b66c17c048 Mon Sep 17 00:00:00 2001
+From: Lukas Slebodnik <lslebodn@redhat.com>
+Date: Thu, 19 Nov 2015 13:07:52 +0000
+Subject: [PATCH] pysss_murmur: Fix warning Wsign-compare
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+src/python/pysss_murmur.c: In function ‘py_murmurhash3’:
+src/python/pysss_murmur.c:47:17: error: comparison between
+     signed and unsigned integer expressions [-Werror=sign-compare]
+         key_len > strlen(key)) {
+                 ^
+
+uint32_t murmurhash3(const char *key, int len, uint32_t seed)
+The second argument of the function murmurhash3 has type int.
+But the code expects to be unsigned integer.
+
+There is code in python wrapper py_murmurhash3
+which check boundaries of that argument.
+It should be an unsigned "key_len > INT_MAX || key_len < 0".
+An exception should be thrown for negative number.
+
+Moreover, the length should be shorter then a length of input string.
+The strlen returns size_t which is unsigned and key_len is signed long.
+We already checked that value is unsigned so
+we can safely cast key_len to size_t
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 2ff8131cf02decaf0dd0754e843732fe7774fc59)
+(cherry picked from commit 9341809d4428cd187aefdb2871afffb327447002)
+---
+ src/python/pysss_murmur.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/python/pysss_murmur.c b/src/python/pysss_murmur.c
+index 97d752b2a7734a332a5d5da07d75b594638015c8..b14a672025c218ae3ab314c3ad2cf2c5ced40870 100644
+--- a/src/python/pysss_murmur.c
++++ b/src/python/pysss_murmur.c
+@@ -44,7 +44,7 @@ static PyObject * py_murmurhash3(PyObject *module, PyObject *args)
+     }
+ 
+     if (seed > UINT32_MAX || key_len > INT_MAX || key_len < 0 ||
+-        key_len > strlen(key)) {
++        (size_t)key_len > strlen(key)) {
+         PyErr_Format(PyExc_ValueError, "Invalid value\n");
+         return NULL;
+     }
+-- 
+2.14.3
+

@@ -1,0 +1,123 @@
+From b5ec4155c9c54f99bf76cf9a9c010558b31df6ac Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Fri, 22 Apr 2016 17:56:05 +0200
+Subject: [PATCH] IPA: allow lookups by cert in sub-domains on the client
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 21513e51a4a2eb08f245333bf8f223713a3d7cb3)
+(cherry picked from commit f13505ce5632822e093982ca3bbf94f327d59a34)
+---
+ src/providers/ipa/ipa_s2n_exop.c      | 25 +++++++++++++++++++++----
+ src/providers/ipa/ipa_subdomains.h    |  4 +++-
+ src/providers/ipa/ipa_subdomains_id.c | 21 +++++++++++++++++----
+ 3 files changed, 41 insertions(+), 9 deletions(-)
+
+diff --git a/src/providers/ipa/ipa_s2n_exop.c b/src/providers/ipa/ipa_s2n_exop.c
+index 676b55f37fda45387009bce7aabb546118e38de0..22e99cbef805cdb3304afc70d767b4bf61fb7be9 100644
+--- a/src/providers/ipa/ipa_s2n_exop.c
++++ b/src/providers/ipa/ipa_s2n_exop.c
+@@ -33,7 +33,8 @@ enum input_types {
+     INP_SID = 1,
+     INP_NAME,
+     INP_POSIX_UID,
+-    INP_POSIX_GID
++    INP_POSIX_GID,
++    INP_CERT
+ };
+ 
+ enum request_types {
+@@ -351,11 +352,22 @@ static errno_t s2n_encode_request(TALLOC_CTX *mem_ctx,
+             break;
+         case BE_REQ_BY_SECID:
+             if (req_input->type == REQ_INP_SECID) {
+-            ret = ber_printf(ber, "{ees}", INP_SID, request_type,
+-                                           req_input->inp.secid);
++                ret = ber_printf(ber, "{ees}", INP_SID, request_type,
++                                               req_input->inp.secid);
+             } else {
+                 DEBUG(SSSDBG_OP_FAILURE, "Unexpected input type [%d].\n",
+-                                          req_input->type == REQ_INP_ID);
++                                         req_input->type == REQ_INP_ID);
++                ret = EINVAL;
++                goto done;
++            }
++            break;
++        case BE_REQ_BY_CERT:
++            if (req_input->type == REQ_INP_CERT) {
++            ret = ber_printf(ber, "{ees}", INP_CERT, request_type,
++                                           req_input->inp.cert);
++            } else {
++                DEBUG(SSSDBG_OP_FAILURE, "Unexpected input type [%d].\n",
++                                          req_input->type);
+                 ret = EINVAL;
+                 goto done;
+             }
+@@ -1483,6 +1495,11 @@ static void ipa_s2n_get_user_done(struct tevent_req *subreq)
+     talloc_zfree(subreq);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_OP_FAILURE, "s2n exop request failed.\n");
++        if (state->req_input->type == REQ_INP_CERT) {
++            DEBUG(SSSDBG_OP_FAILURE,
++                  "Maybe the server does not support lookups by "
++                  "certificates.\n");
++        }
+         goto done;
+     }
+ 
+diff --git a/src/providers/ipa/ipa_subdomains.h b/src/providers/ipa/ipa_subdomains.h
+index 0c13f8ed2eeda87237dfb097f532c7137095ddf1..38255cdb343f78dadc7a4ea669fe758aa362cc41 100644
+--- a/src/providers/ipa/ipa_subdomains.h
++++ b/src/providers/ipa/ipa_subdomains.h
+@@ -116,7 +116,8 @@ int ipa_ad_subdom_init(struct be_ctx *be_ctx,
+ enum req_input_type {
+     REQ_INP_NAME,
+     REQ_INP_ID,
+-    REQ_INP_SECID
++    REQ_INP_SECID,
++    REQ_INP_CERT
+ };
+ 
+ struct req_input {
+@@ -125,6 +126,7 @@ struct req_input {
+         const char *name;
+         uint32_t id;
+         const char *secid;
++        const char *cert;
+     } inp;
+ };
+ 
+diff --git a/src/providers/ipa/ipa_subdomains_id.c b/src/providers/ipa/ipa_subdomains_id.c
+index 0050925b30ef364c698fe96244789c6ad68e03aa..361c0b41f3ac54c0963e692f80757060ed6b5396 100644
+--- a/src/providers/ipa/ipa_subdomains_id.c
++++ b/src/providers/ipa/ipa_subdomains_id.c
+@@ -492,10 +492,23 @@ static void ipa_get_subdom_acct_connected(struct tevent_req *subreq)
+             }
+             break;
+         case BE_FILTER_CERT:
+-            DEBUG(SSSDBG_OP_FAILURE, "Lookup by certificate not supported yet.\n");
+-            state->dp_error = dp_error;
+-            tevent_req_error(req, EINVAL);
+-            return;
++            if (sdap_is_extension_supported(sdap_id_op_handle(state->op),
++                                            EXOP_SID2NAME_V1_OID)) {
++                req_input->type = REQ_INP_CERT;
++                req_input->inp.cert = talloc_strdup(req_input, state->filter);
++                if (req_input->inp.cert == NULL) {
++                    DEBUG(SSSDBG_OP_FAILURE, "talloc_strdup failed.\n");
++                    tevent_req_error(req, ENOMEM);
++                    return;
++                }
++            } else {
++                DEBUG(SSSDBG_OP_FAILURE,
++                      "Lookup by certificate not supported by the server.\n");
++                state->dp_error = DP_ERR_OK;
++                tevent_req_error(req, EINVAL);
++                return;
++            }
++            break;
+         default:
+             DEBUG(SSSDBG_OP_FAILURE, "Invalid sub-domain filter type.\n");
+             state->dp_error = dp_error;
+-- 
+2.14.3
+

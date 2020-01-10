@@ -1,0 +1,51 @@
+From 321fb51bff750e3c69dd4e7741694520c862cbfe Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Thu, 25 Jan 2018 17:25:50 +0100
+Subject: [PATCH] IPA: make get_object_from_cache() aware of UPN searches
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Based on commit 0ad1bcec60a2ec67a602e0ad1888f859d6009d54 in master, but
+somewhat adapted to apply on sssd-1-13
+
+Reviewed-by: Lukáš Slebodník <lslebodn@redhat.com>
+(cherry picked from commit f6afb6f9418735bcfd125eb2bb2ffeeb5cc07d99)
+
+DOWNSTREAM:
+Resolves: rhbz#1487040 - sssd does not evaluate AD UPN suffixes which results in failed user logins
+---
+ src/providers/ipa/ipa_subdomains_id.c | 16 ++++++++++++----
+ 1 file changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/src/providers/ipa/ipa_subdomains_id.c b/src/providers/ipa/ipa_subdomains_id.c
+index 361c0b41f3ac54c0963e692f80757060ed6b5396..11e6b153d7e7f752e79ae06ecfd5a22e7664bfde 100644
+--- a/src/providers/ipa/ipa_subdomains_id.c
++++ b/src/providers/ipa/ipa_subdomains_id.c
+@@ -1019,11 +1019,19 @@ errno_t get_object_from_cache(TALLOC_CTX *mem_ctx,
+         case BE_REQ_INITGROUPS:
+         case BE_REQ_USER:
+         case BE_REQ_USER_AND_GROUP:
+-            ret = sysdb_search_user_by_name(mem_ctx, dom, name, attrs, &msg);
+-            if (ret == ENOENT && (ar->entry_type & BE_REQ_TYPE_MASK)
++            if (ar->extra_value
++                    && strcmp(ar->extra_value, EXTRA_NAME_IS_UPN) == 0) {
++                ret = sysdb_search_user_by_upn(mem_ctx, dom, name,
++                                               attrs, &msg);
++            } else {
++                ret = sysdb_search_user_by_name(mem_ctx, dom, name,
++                                                attrs, &msg);
++                if (ret == ENOENT && (ar->entry_type & BE_REQ_TYPE_MASK)
+                                                      == BE_REQ_USER_AND_GROUP) {
+-                ret = sysdb_search_group_by_name(mem_ctx, dom, name,
+-                                                 attrs, &msg);
++                    ret = sysdb_search_group_by_name(mem_ctx, dom,
++                                                     name, attrs,
++                                                     &msg);
++                }
+             }
+             break;
+         default:
+-- 
+2.14.3
+

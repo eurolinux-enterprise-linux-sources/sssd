@@ -1,0 +1,61 @@
+From 88a3b3759c344c4b3d803aab1cc6c510dff7371a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Fabiano=20Fid=C3=AAncio?= <fidencio@redhat.com>
+Date: Tue, 12 Dec 2017 14:47:38 +0100
+Subject: [PATCH] SYSDB_VIEWS: Remove sshPublicKey attribute when it's not set
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+We have to explicitly remove 'sshPublicKey' attribute from an override
+in case it's not set, otherwise we may ended up in a situation where a
+ssh key is removed from IPA but it'll still be present in SSSD's server
+cache, allowing then users to ssh to a machine even having a key that
+has already been removed from IPA.
+
+Related: https://pagure.io/SSSD/sssd/issue/3602
+
+Signed-off-by: Fabiano Fidêncio <fidencio@redhat.com>
+
+Reviewed-by: Sumit Bose <sbose@redhat.com>
+(cherry picked from commit d0d3631242178f0b6fccf08baeca1a57f28771fa)
+(cherry picked from commit b5c3597d0a13256d381b60ba24838d64edfb68df)
+(cherry picked from commit a02baf4dac81278a597b0f5df66a3df3e3d5a2ca)
+---
+ src/db/sysdb_views.c | 14 +++++++++++++-
+ 1 file changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/src/db/sysdb_views.c b/src/db/sysdb_views.c
+index 323fd98267ca575f5387c9d0ae70930bf34a8d59..3082830702de08e1a7139028202ba35d57663e11 100644
+--- a/src/db/sysdb_views.c
++++ b/src/db/sysdb_views.c
+@@ -740,6 +740,8 @@ errno_t sysdb_apply_default_override(struct sss_domain_info *domain,
+                                     SYSDB_USER_CERT,
+                                     NULL };
+     bool override_attrs_found = false;
++    struct ldb_message_element el_del = { 0, SYSDB_SSH_PUBKEY, 0, NULL };
++    struct sysdb_attrs del_attrs = { 1, &el_del };
+ 
+     if (override_attrs == NULL) {
+         /* nothing to do */
+@@ -809,7 +811,17 @@ errno_t sysdb_apply_default_override(struct sss_domain_info *domain,
+                           el->values[d].data, ldb_dn_get_linearized(obj_dn));
+                 }
+             }
+-        } else if (ret != ENOENT) {
++        } else if (ret == ENOENT) {
++            if (strcmp(allowed_attrs[c], SYSDB_SSH_PUBKEY) == 0) {
++                ret = sysdb_set_entry_attr(domain->sysdb, obj_dn, &del_attrs,
++                                           SYSDB_MOD_DEL);
++                if (ret != EOK && ret != ENOENT) {
++                    DEBUG(SSSDBG_OP_FAILURE,
++                          "sysdb_set_entry_attr failed.\n");
++                    goto done;
++                }
++            }
++        } else {
+             DEBUG(SSSDBG_OP_FAILURE, "sysdb_attrs_get_el_ext failed.\n");
+             goto done;
+         }
+-- 
+2.14.3
+
