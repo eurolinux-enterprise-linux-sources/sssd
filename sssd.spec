@@ -26,7 +26,7 @@
 
 Name: sssd
 Version: 1.13.3
-Release: 56%{?dist}
+Release: 57%{?dist}
 Group: Applications/System
 Summary: System Security Services Daemon
 License: GPLv3+
@@ -164,6 +164,7 @@ Patch0126: 0126-LDAP-Adding-SIGTERM-signal-before-SIGKILL.patch
 Patch0127: 0127-LDAP-Adding-SIGCHLD-callback.patch
 Patch0128: 0128-GPO-Skip-GPOs-without-gPCFunctionalityVersion.patch
 Patch0129: 0129-gpo-Improve-debug-messages.patch
+Patch0130: 0130-HBAC-Do-not-rely-on-originalMemberOf-use-the-sysdb-m.patch
 
 ### Dependencies ###
 Requires: sssd-common = %{version}-%{release}
@@ -941,6 +942,10 @@ fi
 %postun -n libsss_idmap -p /sbin/ldconfig
 
 %changelog
+* Thu Jul 27 2017 Jakub Hrozek <jhrozek@redhat.com> - 1.13.3-57
+- Resolves: rhbz#1473005 - The originalMemberOf attribute disappears from
+                           the cache, causing intermittent HBAC issues
+
 * Fri Jan 27 2017 Lukas Slebodnik <lslebodn@redhat.com> - 1.13.3-56
 - Resolves: rhbz#1404697 - SSSD does not skip GPO if no gpcFunctionalityVersion present
 - Resolves: rhbz#1374813 - SSSD fails to process GPO from Active Directory
