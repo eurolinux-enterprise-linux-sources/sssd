@@ -1,0 +1,30 @@
+From d33ec64423087261fcc14acb5922793fadb83342 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Tue, 4 Dec 2018 13:08:11 +0100
+Subject: [PATCH 50/51] Revert "IPA: use forest name when looking up the Global
+ Catalog"
+
+This reverts commit 149174acae677d1e72a0da431bf0850d55f2ccb4.
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 9096fc01cca8fcaeb19c36a27f3a9fa09d60772a)
+---
+ src/providers/ipa/ipa_subdomains_server.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/providers/ipa/ipa_subdomains_server.c b/src/providers/ipa/ipa_subdomains_server.c
+index e5ea4bd02..43a3053cb 100644
+--- a/src/providers/ipa/ipa_subdomains_server.c
++++ b/src/providers/ipa/ipa_subdomains_server.c
+@@ -266,7 +266,7 @@ ipa_ad_ctx_new(struct be_ctx *be_ctx,
+         DEBUG(SSSDBG_TRACE_ALL, "No extra attrs set.\n");
+     }
+ 
+-    gc_service_name = talloc_asprintf(ad_options, "sd_gc_%s", subdom->forest);
++    gc_service_name = talloc_asprintf(ad_options, "sd_gc_%s", subdom->name);
+     if (gc_service_name == NULL) {
+         talloc_free(ad_options);
+         return ENOMEM;
+-- 
+2.19.1
+

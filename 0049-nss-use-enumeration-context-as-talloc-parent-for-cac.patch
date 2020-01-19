@@ -1,0 +1,146 @@
+From 720a423a0119f23606c6029c3f48be98841ca910 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pavel=20B=C5=99ezina?= <pbrezina@redhat.com>
+Date: Tue, 30 Oct 2018 13:21:28 +0100
+Subject: [PATCH] nss: use enumeration context as talloc parent for cache req
+ result
+
+Otherwise we end up with memory leak since the result is never freed.
+
+We need to convert nctx->*ent structures into talloc pointer so
+we can use enum_ctx as parent.
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3870
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 406b731ddfbeb62623640cc37a7adc76af0a4b22)
+---
+ src/responder/nss/nss_cmd.c     | 12 ++++++------
+ src/responder/nss/nss_enum.c    |  2 +-
+ src/responder/nss/nss_private.h |  6 +++---
+ src/responder/nss/nsssrv.c      | 21 +++++++++++++++++++++
+ 4 files changed, 31 insertions(+), 10 deletions(-)
+
+diff --git a/src/responder/nss/nss_cmd.c b/src/responder/nss/nss_cmd.c
+index 9ee6ca805..25e663ed5 100644
+--- a/src/responder/nss/nss_cmd.c
++++ b/src/responder/nss/nss_cmd.c
+@@ -942,7 +942,7 @@ static errno_t nss_cmd_setpwent(struct cli_ctx *cli_ctx)
+ 
+     nss_ctx = talloc_get_type(cli_ctx->rctx->pvt_ctx, struct nss_ctx);
+ 
+-    return nss_setent(cli_ctx, CACHE_REQ_ENUM_USERS, &nss_ctx->pwent);
++    return nss_setent(cli_ctx, CACHE_REQ_ENUM_USERS, nss_ctx->pwent);
+ }
+ 
+ static errno_t nss_cmd_getpwent(struct cli_ctx *cli_ctx)
+@@ -955,7 +955,7 @@ static errno_t nss_cmd_getpwent(struct cli_ctx *cli_ctx)
+ 
+     return nss_getent(cli_ctx, CACHE_REQ_ENUM_USERS,
+                       &state_ctx->pwent, nss_protocol_fill_pwent,
+-                      &nss_ctx->pwent);
++                      nss_ctx->pwent);
+ }
+ 
+ static errno_t nss_cmd_endpwent(struct cli_ctx *cli_ctx)
+@@ -998,7 +998,7 @@ static errno_t nss_cmd_setgrent(struct cli_ctx *cli_ctx)
+ 
+     nss_ctx = talloc_get_type(cli_ctx->rctx->pvt_ctx, struct nss_ctx);
+ 
+-    return nss_setent(cli_ctx, CACHE_REQ_ENUM_GROUPS, &nss_ctx->grent);
++    return nss_setent(cli_ctx, CACHE_REQ_ENUM_GROUPS, nss_ctx->grent);
+ }
+ 
+ static errno_t nss_cmd_getgrent(struct cli_ctx *cli_ctx)
+@@ -1011,7 +1011,7 @@ static errno_t nss_cmd_getgrent(struct cli_ctx *cli_ctx)
+ 
+     return nss_getent(cli_ctx, CACHE_REQ_ENUM_GROUPS,
+                       &state_ctx->grent, nss_protocol_fill_grent,
+-                      &nss_ctx->grent);
++                      nss_ctx->grent);
+ }
+ 
+ static errno_t nss_cmd_endgrent(struct cli_ctx *cli_ctx)
+@@ -1093,7 +1093,7 @@ static errno_t nss_cmd_setservent(struct cli_ctx *cli_ctx)
+ 
+     nss_ctx = talloc_get_type(cli_ctx->rctx->pvt_ctx, struct nss_ctx);
+ 
+-    return nss_setent(cli_ctx, CACHE_REQ_ENUM_SVC, &nss_ctx->svcent);
++    return nss_setent(cli_ctx, CACHE_REQ_ENUM_SVC, nss_ctx->svcent);
+ }
+ 
+ static errno_t nss_cmd_getservent(struct cli_ctx *cli_ctx)
+@@ -1106,7 +1106,7 @@ static errno_t nss_cmd_getservent(struct cli_ctx *cli_ctx)
+ 
+     return nss_getent(cli_ctx, CACHE_REQ_ENUM_SVC,
+                       &state_ctx->svcent, nss_protocol_fill_svcent,
+-                      &nss_ctx->svcent);
++                      nss_ctx->svcent);
+ }
+ 
+ static errno_t nss_cmd_endservent(struct cli_ctx *cli_ctx)
+diff --git a/src/responder/nss/nss_enum.c b/src/responder/nss/nss_enum.c
+index a45b65233..9588943c9 100644
+--- a/src/responder/nss/nss_enum.c
++++ b/src/responder/nss/nss_enum.c
+@@ -138,7 +138,7 @@ static void nss_setent_internal_done(struct tevent_req *subreq)
+     switch (ret) {
+     case EOK:
+         talloc_zfree(state->enum_ctx->result);
+-        state->enum_ctx->result = talloc_steal(state->nss_ctx, result);
++        state->enum_ctx->result = talloc_steal(state->enum_ctx, result);
+ 
+         if (state->type == CACHE_REQ_NETGROUP_BY_NAME) {
+             /* We need to expand the netgroup into triples and members. */
+diff --git a/src/responder/nss/nss_private.h b/src/responder/nss/nss_private.h
+index aa8d8e9cd..cd0d35517 100644
+--- a/src/responder/nss/nss_private.h
++++ b/src/responder/nss/nss_private.h
+@@ -78,9 +78,9 @@ struct nss_ctx {
+     const char **extra_attributes;
+ 
+     /* Enumeration. */
+-    struct nss_enum_ctx pwent;
+-    struct nss_enum_ctx grent;
+-    struct nss_enum_ctx svcent;
++    struct nss_enum_ctx *pwent;
++    struct nss_enum_ctx *grent;
++    struct nss_enum_ctx *svcent;
+     hash_table_t *netgrent;
+ 
+     /* Memory cache. */
+diff --git a/src/responder/nss/nsssrv.c b/src/responder/nss/nsssrv.c
+index 004e6c1a1..d6c5a08a9 100644
+--- a/src/responder/nss/nsssrv.c
++++ b/src/responder/nss/nsssrv.c
+@@ -378,6 +378,27 @@ int nss_process_init(TALLOC_CTX *mem_ctx,
+         goto fail;
+     }
+ 
++    nctx->pwent = talloc_zero(nctx, struct nss_enum_ctx);
++    if (nctx->pwent == NULL) {
++        DEBUG(SSSDBG_FATAL_FAILURE, "Unable to initialize pwent context!\n");
++        ret = ENOMEM;
++        goto fail;
++    }
++
++    nctx->grent = talloc_zero(nctx, struct nss_enum_ctx);
++    if (nctx->grent == NULL) {
++        DEBUG(SSSDBG_FATAL_FAILURE, "Unable to initialize grent context!\n");
++        ret = ENOMEM;
++        goto fail;
++    }
++
++    nctx->svcent = talloc_zero(nctx, struct nss_enum_ctx);
++    if (nctx->svcent == NULL) {
++        DEBUG(SSSDBG_FATAL_FAILURE, "Unable to initialize svcent context!\n");
++        ret = ENOMEM;
++        goto fail;
++    }
++
+     nctx->netgrent = sss_ptr_hash_create(nctx, NULL, NULL);
+     if (nctx->netgrent == NULL) {
+         DEBUG(SSSDBG_FATAL_FAILURE, "Unable to initialize netgroups table!\n");
+-- 
+2.19.1
+

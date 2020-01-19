@@ -48,7 +48,7 @@
 
 Name: sssd
 Version: 1.16.2
-Release: 13%{?dist}
+Release: 13%{?dist}.5
 Group: Applications/System
 Summary: System Security Services Daemon
 License: GPLv3+
@@ -103,6 +103,14 @@ Patch0043: 0043-CRYPTO-Save-prefix-in-s3crypt_sha512.patch
 Patch0044: 0044-crypto-tests-Add-unit-test-for-s3crypt_sha512.patch
 Patch0045: 0045-SSS_CERT-Close-file-descriptors-after-executing-p11_.patch
 Patch0046: 0046-SELINUX-Also-call-is_selinux_enabled-as-a-check-for-.patch
+Patch0047: 0047-SELINUX-Always-add-SELinux-user-to-the-semanage-data.patch
+Patch0048: 0048-sudo-respect-case-sensitivity-in-sudo-responder.patch
+Patch0049: 0049-nss-use-enumeration-context-as-talloc-parent-for-cac.patch
+Patch0050: 0050-Revert-IPA-use-forest-name-when-looking-up-the-Globa.patch
+Patch0051: 0051-ipa-use-only-the-global-catalog-service-of-the-fores.patch
+Patch0052: 0052-LDAP-minor-refactoring-in-auth_send-to-conform-to-ou.patch
+Patch0053: 0053-LDAP-Only-authenticate-the-auth-connection-if-we-nee.patch
+Patch0054: 0054-LDAP-Log-the-encryption-used-during-LDAP-authenticat.patch
 
 #This patch should not be removed in RHEL-7
 Patch999: 0999-NOUPSTREAM-Default-to-root-if-sssd-user-is-not-spec
@@ -1255,6 +1263,25 @@ systemctl try-restart sssd >/dev/null 2>&1 || :
 }
 
 %changelog
+* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.3-5
+- Resolves: rhbz#1659507 - SSSD's LDAP authentication provider does not work
+                           if ID provider is authenticated with GSSAPI [rhel-7.6.z] 
+
+* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.3-4
+- Resolves: rhbz#1659083 - SSSD must be cleared/restarted periodically in
+            order to retrieve AD users through IPA Trust [rhel-7.6.z]
+
+* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.3-3
+- Resolves: rhbz#1656833 - sssd_nss memory leak [rhel-7.6.z]
+
+* Wed Nov 28 2018 Michal Židek <mzidek@redhat.com> - 1.16.3-2
+- Resolves: Bug 1649784 - SSSD not fetching all sudo rules from
+                          AD [rhel-7.6.z] 
+
+* Wed Nov 14 2018 Michal Židek <mzidek@redhat.com> - 1.16.3-1
+- Resolves: rhbz#1645047 - sssd only sets the SELinux login context if it
+                           differs from the default [rhel-7.6.z]
+
 * Wed Sep  5 2018 Jakub Hrozek <jhrozek@redhat.com> - 1.16.2-13
 - Resolves: rhbz#1593756 - sssd needs to require a newer version of
                            libtalloc and libtevent to avoid an issue
