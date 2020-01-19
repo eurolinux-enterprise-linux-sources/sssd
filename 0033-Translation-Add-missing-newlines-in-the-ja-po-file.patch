@@ -1,0 +1,40 @@
+From 32d171f48920eaa98b84c73f69636e6388c28133 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20=C5=BDidek?= <mzidek@redhat.com>
+Date: Thu, 6 Jun 2019 03:47:17 +0200
+Subject: [PATCH 33/33] Translation: Add missing newlines in the ja po file
+
+---
+ po/ja.po | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/po/ja.po b/po/ja.po
+index 396b693c2..f6ed9834b 100644
+--- a/po/ja.po
++++ b/po/ja.po
+@@ -2115,7 +2115,7 @@ msgstr ""
+ #: src/tools/sss_usermod.c:117 src/tools/sss_usermod.c:126
+ #: src/tools/sss_usermod.c:135
+ msgid "Specify the attribute name/value pair(s)\n"
+-msgstr "属性の名前/値のペアを指定します"
++msgstr "属性の名前/値のペアを指定します\n"
+ 
+ #: src/tools/sss_usermod.c:152
+ msgid "Specify user to modify\n"
+@@ -2146,12 +2146,12 @@ msgstr "指定された検索に一致するキャッシュオブジェクトが
+ #: src/tools/sss_cache.c:519
+ #, c-format
+ msgid "Couldn't invalidate %1$s\n"
+-msgstr "%1$s を無効化できませんでした"
++msgstr "%1$s を無効化できませんでした\n"
+ 
+ #: src/tools/sss_cache.c:526
+ #, c-format
+ msgid "Couldn't invalidate %1$s %2$s\n"
+-msgstr "%1$s %2$s を無効化できませんでした"
++msgstr "%1$s %2$s を無効化できませんでした\n"
+ 
+ #: src/tools/sss_cache.c:689
+ msgid "Invalidate all cached entries"
+-- 
+2.19.1
+

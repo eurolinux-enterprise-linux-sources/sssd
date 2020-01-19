@@ -5,14 +5,15 @@
 # Author: Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com>
 # Author: Lukas Slebodnik <lslebodn@redhat.com>
 #
-# This is free software; you can redistribute it and/or modify it
-# under the terms of the GNU General Public License as published by
-# the Free Software Foundation; version 2 only
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3 of the License, or
+# (at your option) any later version.
 #
-# This program is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-# General Public License for more details.
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
@@ -186,6 +187,18 @@ class DSOpenLDAP(DS):
         db_config_file.write(db_config)
         db_config_file.close()
 
+        # Import ad schema
+        subprocess.check_call(
+            ["slapadd", "-F", self.conf_slapd_d_dir, "-b", "cn=config",
+             "-l", "data/ssh_schema.ldif"],
+        )
+
+        # Import sudo schema
+        subprocess.check_call(
+            ["slapadd", "-F", self.conf_slapd_d_dir, "-b", "cn=config",
+             "-l", "data/sudo_schema.ldif"],
+        )
+
     def _start_daemon(self):
         """Start the instance."""
         if subprocess.call(["slapd", "-F", self.conf_slapd_d_dir,
@@ -266,6 +279,13 @@ class DSOpenLDAP(DS):
             ldap_conn.add_s("ou=" + ou + "," + self.base_dn, [
                 ("objectClass", [b"top", b"organizationalUnit"]),
             ])
+        ldap_conn.add_s("ou=sudoers," + self.base_dn, [
+            ("objectClass", [b"top", b"organizationalUnit"]),
+        ])
+        ldap_conn.add_s("cn=testrule,ou=sudoers," + self.base_dn, [
+            ("objectClass", [b"top", b"sudoRole"]),
+            ("sudoUser", [b"tuser"]),
+        ])
         ldap_conn.unbind_s()
 
     def _stop_daemon(self):

@@ -1,0 +1,511 @@
+From 45580b2c90d7c19f1d8df57ce7b3e9f3e0acc244 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 27 Mar 2019 21:05:06 +0100
+Subject: [PATCH 19/21] PAM: add initial prompting configuration
+
+Add new section for sssd.conf to allow more flexible prompting during
+authentication.
+
+Related to https://pagure.io/SSSD/sssd/issue/3264
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked with fixes from commit a4d178593bec65a4c7534b841cedfbb74c56f49f)
+---
+ Makefile.am                              |   7 +
+ src/confdb/confdb.h                      |  10 +
+ src/man/sssd.conf.5.xml                  |  66 ++++++
+ src/responder/pam/pam_prompting_config.c | 275 +++++++++++++++++++++++
+ src/responder/pam/pamsrv.c               |  16 +-
+ src/responder/pam/pamsrv.h               |   6 +
+ src/responder/pam/pamsrv_cmd.c           |   8 +
+ 7 files changed, 387 insertions(+), 1 deletion(-)
+ create mode 100644 src/responder/pam/pam_prompting_config.c
+
+diff --git a/Makefile.am b/Makefile.am
+index f7f55e96a..e22423071 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -1397,8 +1397,13 @@ sssd_pam_SOURCES = \
+     src/responder/pam/pamsrv_cmd.c \
+     src/responder/pam/pamsrv_p11.c \
+     src/responder/pam/pamsrv_dp.c \
++    src/responder/pam/pam_prompting_config.c \
++    src/sss_client/pam_sss_prompt_config.c \
+     src/responder/pam/pam_helpers.c \
+     $(SSSD_RESPONDER_OBJ)
++sssd_pam_CFLAGS = \
++    $(AM_CFLAGS) \
++    $(NULL)
+ sssd_pam_LDADD = \
+     $(LIBADD_DL) \
+     $(TDB_LIBS) \
+@@ -2446,6 +2451,8 @@ pam_srv_tests_SOURCES = \
+     src/responder/pam/pam_helpers.c \
+     src/responder/pam/pamsrv_dp.c \
+     src/responder/pam/pam_LOCAL_domain.c \
++    src/responder/pam/pam_prompting_config.c \
++    src/sss_client/pam_sss_prompt_config.c \
+     $(NULL)
+ pam_srv_tests_CFLAGS = \
+     -U SSSD_LIBEXEC_PATH -DSSSD_LIBEXEC_PATH=\"$(abs_builddir)\" \
+diff --git a/src/confdb/confdb.h b/src/confdb/confdb.h
+index e8091fcd9..0251ab606 100644
+--- a/src/confdb/confdb.h
++++ b/src/confdb/confdb.h
+@@ -266,6 +266,16 @@
+ #define CONFDB_KCM_SOCKET "socket_path"
+ #define CONFDB_KCM_DB "ccache_storage" /* Undocumented on purpose */
+ 
++/* Prompting */
++#define CONFDB_PC_CONF_ENTRY "config/prompting"
++#define CONFDB_PC_TYPE_PASSWORD "password"
++#define CONFDB_PC_PASSWORD_PROMPT "password_prompt"
++#define CONFDB_PC_TYPE_2FA "2fa"
++#define CONFDB_PC_2FA_SINGLE_PROMPT "single_prompt"
++#define CONFDB_PC_2FA_1ST_PROMPT "first_prompt"
++#define CONFDB_PC_2FA_2ND_PROMPT "second_prompt"
++#define CONFDB_PC_TYPE_CERT_AUTH "cert_auth"
++
+ struct confdb_ctx;
+ struct config_file_ctx;
+ 
+diff --git a/src/man/sssd.conf.5.xml b/src/man/sssd.conf.5.xml
+index 3d017f638..274809e24 100644
+--- a/src/man/sssd.conf.5.xml
++++ b/src/man/sssd.conf.5.xml
+@@ -3364,6 +3364,72 @@ ldap_user_extra_attrs = phone:telephoneNumber
+         </para>
+     </refsect1>
+ 
++    <refsect1 id='prompting_configuration'>
++        <title>PROMPTING CONFIGURATION SECTION</title>
++        <para>
++            If a special file
++            (<filename>/var/lib/sss/pubconf/pam_preauth_available</filename>)
++            exists SSSD's PAM module pam_sss will ask SSSD to figure out which
++            authentication methods are available for the user trying to log in.
++            Based on the results pam_sss will prompt the user for appropriate
++            credentials.
++        </para>
++        <para>
++            With the growing number of authentication methods and the
++            possibility that there are multiple ones for a single user the
++            heuristic used by pam_sss to select the prompting might not be
++            suitable for all use cases. To following options should provide a
++            better flexibility here.
++        </para>
++        <para>
++            Each supported authentication method has it's own configuration
++            sub-section under <quote>[prompting/...]</quote>. Currently there
++            are:
++        <variablelist>
++            <varlistentry>
++                <term>[prompting/password]</term>
++                <listitem>
++                    <para>to configure password prompting, allowed options are:
++                    <variablelist><varlistentry><term>password_prompt</term>
++                        <listitem><para>to change the string of the password
++                        prompt</para></listitem></varlistentry></variablelist>
++                    </para>
++                </listitem>
++            </varlistentry>
++        </variablelist>
++        <variablelist>
++            <varlistentry>
++                <term>[prompting/2fa]</term>
++                <listitem>
++                    <para>to configure two-factor authentication prompting,
++                    allowed options are:
++                    <variablelist><varlistentry><term>first_prompt</term>
++                        <listitem><para>to change the string of the prompt for
++                        the first factor </para></listitem>
++                        </varlistentry>
++                        <varlistentry><term>second_prompt</term>
++                        <listitem><para>to change the string of the prompt for
++                        the second factor </para></listitem>
++                        </varlistentry>
++                        <varlistentry><term>single_prompt</term>
++                        <listitem><para>boolean value, if True there will be
++                        only a single prompt using the value of first_prompt
++                        where it is expected that both factor are entered as a
++                        single string</para></listitem>
++                        </varlistentry>
++                    </variablelist>
++                    </para>
++                </listitem>
++            </varlistentry>
++        </variablelist>
++        </para>
++        <para>
++            It is possible to add a sub-section for specific PAM services like
++            e.g. <quote>[prompting/password/sshd]</quote> to individual change
++            the prompting for this service.
++        </para>
++    </refsect1>
++
+     <refsect1 id='example'>
+         <title>EXAMPLES</title>
+         <para>
+diff --git a/src/responder/pam/pam_prompting_config.c b/src/responder/pam/pam_prompting_config.c
+new file mode 100644
+index 000000000..c3ee41d4b
+--- /dev/null
++++ b/src/responder/pam/pam_prompting_config.c
+@@ -0,0 +1,275 @@
++/*
++   SSSD
++
++   PAM Responder - helpers for PAM prompting configuration
++
++   Copyright (C) Sumit Bose <sbose@redhat.com> 2019
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 3 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#include "util/util.h"
++#include "providers/data_provider.h"
++#include "confdb/confdb.h"
++#include "sss_client/sss_cli.h"
++#include "responder/pam/pamsrv.h"
++
++typedef errno_t (pam_set_prompting_fn_t)(TALLOC_CTX *, struct confdb_ctx *,
++                                         const char *,
++                                         struct prompt_config ***);
++
++
++static errno_t pam_set_password_prompting_options(TALLOC_CTX *tmp_ctx,
++                                                struct confdb_ctx *cdb,
++                                                const char *section,
++                                                struct prompt_config ***pc_list)
++{
++    int ret;
++    char *value = NULL;
++
++    ret = confdb_get_string(cdb, tmp_ctx, section, CONFDB_PC_PASSWORD_PROMPT,
++                            NULL, &value);
++    if (ret == EOK && value != NULL) {
++        ret = pc_list_add_password(pc_list, value);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE, "pc_list_add_password failed.\n");
++        }
++        return ret;
++    }
++
++    return ENOENT;
++}
++
++static errno_t pam_set_2fa_prompting_options(TALLOC_CTX *tmp_ctx,
++                                             struct confdb_ctx *cdb,
++                                             const char *section,
++                                             struct prompt_config ***pc_list)
++{
++    bool single_2fa_prompt = false;
++    char *first_prompt = NULL;
++    char *second_prompt = NULL;
++    int ret;
++
++
++    ret = confdb_get_bool(cdb, section, CONFDB_PC_2FA_SINGLE_PROMPT, false,
++                          &single_2fa_prompt);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE, "confdb_get_bool failed, using defaults");
++    }
++    ret = confdb_get_string(cdb, tmp_ctx, section, CONFDB_PC_2FA_1ST_PROMPT,
++                            NULL, &first_prompt);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE, "confdb_get_string failed, using defaults");
++    }
++
++    if (single_2fa_prompt) {
++        ret = pc_list_add_2fa_single(pc_list, first_prompt);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE, "pc_list_add_2fa_single failed.\n");
++        }
++        return ret;
++    } else {
++        ret = confdb_get_string(cdb, tmp_ctx, section, CONFDB_PC_2FA_2ND_PROMPT,
++                                NULL, &second_prompt);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE,
++                  "confdb_get_string failed, using defaults");
++        }
++
++        ret = pc_list_add_2fa(pc_list, first_prompt, second_prompt);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE, "pc_list_add_2fa failed.\n");
++        }
++        return ret;
++    }
++
++    return ENOENT;
++}
++
++static errno_t pam_set_prompting_options(struct confdb_ctx *cdb,
++                                         const char *service_name,
++                                         char **sections,
++                                         int num_sections,
++                                         const char *section_path,
++                                         pam_set_prompting_fn_t *setter,
++                                         struct prompt_config ***pc_list)
++{
++    char *dummy;
++    size_t c;
++    bool global = false;
++    bool specific = false;
++    char *section = NULL;
++    int ret;
++    char *last;
++    TALLOC_CTX *tmp_ctx = NULL;
++
++    tmp_ctx = talloc_new(NULL);
++    if (tmp_ctx == NULL) {
++        ret = ENOMEM;
++        goto done;
++    }
++
++
++    dummy = talloc_asprintf(tmp_ctx, "%s/%s", section_path,
++                                              service_name);
++    for (c = 0; c < num_sections; c++) {
++        if (strcmp(sections[c], CONFDB_PC_TYPE_PASSWORD) == 0) {
++            global = true;
++        }
++        if (dummy != NULL && strcmp(sections[c], dummy) == 0) {
++            specific = true;
++        }
++    }
++
++    section = talloc_asprintf(tmp_ctx, "%s/%s", CONFDB_PC_CONF_ENTRY, dummy);
++    if (section == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "talloc_asprintf failed.\n");
++        ret = ENOMEM;
++        goto done;
++    }
++
++    ret = ENOENT;
++    if (specific) {
++        ret = setter(tmp_ctx, cdb, section, pc_list);
++    }
++    if (global && ret == ENOENT) {
++        last = strrchr(section, '/');
++        if (last != NULL) {
++            *last = '\0';
++            ret = setter(tmp_ctx, cdb, section, pc_list);
++        }
++    }
++    if (ret != EOK && ret != ENOENT) {
++        DEBUG(SSSDBG_OP_FAILURE, "setter failed.\n");
++        goto done;
++    }
++
++    ret = EOK;
++
++done:
++    talloc_free(tmp_ctx);
++    return ret;
++}
++
++errno_t pam_eval_prompting_config(struct pam_ctx *pctx, struct pam_data *pd)
++{
++    int ret;
++    struct response_data *resp;
++    bool password_auth = false;
++    bool otp_auth = false;
++    bool cert_auth = false;
++    struct prompt_config **pc_list = NULL;
++    int resp_len;
++    uint8_t *resp_data = NULL;
++
++    if (pctx->num_prompting_config_sections == 0) {
++        DEBUG(SSSDBG_TRACE_ALL, "No prompting configuration found.\n");
++        return EOK;
++    }
++
++    resp = pd->resp_list;
++    while (resp != NULL) {
++        switch (resp->type) {
++        case SSS_PAM_OTP_INFO:
++            otp_auth = true;
++            break;
++        case SSS_PAM_CERT_INFO:
++            cert_auth = true;
++            break;
++        case SSS_PASSWORD_PROMPTING:
++            password_auth = true;
++            break;
++        case SSS_CERT_AUTH_PROMPTING:
++            /* currently not used */
++            break;
++        default:
++            break;
++        }
++        resp = resp->next;
++    }
++
++    if (!password_auth && !otp_auth && !cert_auth) {
++        /* If the backend cannot determine which authentication types are
++         * available the default would be to prompt for a password. */
++        password_auth = true;
++    }
++
++    DEBUG(SSSDBG_TRACE_ALL, "Authentication types for user [%s] and service "
++                            "[%s]:%s%s%s\n", pd->user, pd->service,
++                            password_auth ? " password": "",
++                            otp_auth ? " two-factor" : "",
++                            cert_auth ? " smartcard" : "");
++
++    if (cert_auth) {
++        /* If certificate based authentication is possilbe, i.e. a Smartcard
++         * or similar with the mapped certificate is available we currently
++         * prefer this authentication type unconditionally. If other types
++         * should be used the Smartcard can be removed during authentication.
++         * Since there currently are no specific options for cert_auth we are
++         * done. */
++        ret = EOK;
++        goto done;
++    }
++
++    /* If OTP and password auth are possible we currently prefer OTP. */
++    if (otp_auth) {
++        ret = pam_set_prompting_options(pctx->rctx->cdb, pd->service,
++                                        pctx->prompting_config_sections,
++                                        pctx->num_prompting_config_sections,
++                                        CONFDB_PC_TYPE_2FA,
++                                        pam_set_2fa_prompting_options,
++                                        &pc_list);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE,
++                  "pam_set_prompting_options failed.\n");
++            goto done;
++        }
++    }
++
++    if (password_auth) {
++        ret = pam_set_prompting_options(pctx->rctx->cdb, pd->service,
++                                        pctx->prompting_config_sections,
++                                        pctx->num_prompting_config_sections,
++                                        CONFDB_PC_TYPE_PASSWORD,
++                                        pam_set_password_prompting_options,
++                                        &pc_list);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE,
++                  "pam_set_prompting_options failed.\n");
++            goto done;
++        }
++    }
++
++    if (pc_list != NULL) {
++        ret = pam_get_response_prompt_config(pc_list, &resp_len, &resp_data);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE,
++                  "pam_get_response_prompt_config failed.\n");
++            goto done;
++        }
++
++        ret = pam_add_response(pd, SSS_PAM_PROMPT_CONFIG, resp_len, resp_data);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE, "pam_add_response failed.\n");
++            goto done;
++        }
++    }
++
++    ret = EOK;
++done:
++    free(resp_data);
++    pc_list_free(pc_list);
++
++    return ret;
++}
+diff --git a/src/responder/pam/pamsrv.c b/src/responder/pam/pamsrv.c
+index 4ddd1d0b3..fb799d28b 100644
+--- a/src/responder/pam/pamsrv.c
++++ b/src/responder/pam/pamsrv.c
+@@ -315,6 +315,16 @@ static int pam_process_init(TALLOC_CTX *mem_ctx,
+         goto done;
+     }
+ 
++    /* Check if there is a prompting configuration */
++    pctx->prompting_config_sections = NULL;
++    pctx->num_prompting_config_sections = 0;
++    ret = confdb_get_sub_sections(pctx, pctx->rctx->cdb, CONFDB_PC_CONF_ENTRY,
++                                  &pctx->prompting_config_sections,
++                                  &pctx->num_prompting_config_sections);
++    if (ret != EOK && ret != ENOENT) {
++        DEBUG(SSSDBG_OP_FAILURE, "confdb_get_sub_sections failed, not fatal.\n");
++    }
++
+     /* Check if certificate based authentication is enabled */
+     ret = confdb_get_bool(pctx->rctx->cdb,
+                           CONFDB_PAM_CONF_ENTRY,
+@@ -346,11 +356,15 @@ static int pam_process_init(TALLOC_CTX *mem_ctx,
+             goto done;
+         }
+ 
++    }
++
++    if (pctx->cert_auth || pctx->num_prompting_config_sections != 0) {
+         ret = create_preauth_indicator();
+         if (ret != EOK) {
+             DEBUG(SSSDBG_OP_FAILURE,
+                   "Failed to create pre-authentication indicator file, "
+-                  "Smartcard authentication might not work as expected.\n");
++                  "Smartcard authentication or configured prompting might "
++                  "not work as expected.\n");
+         }
+     }
+ 
+diff --git a/src/responder/pam/pamsrv.h b/src/responder/pam/pamsrv.h
+index 3325d9b9f..319362a95 100644
+--- a/src/responder/pam/pamsrv.h
++++ b/src/responder/pam/pamsrv.h
+@@ -52,6 +52,9 @@ struct pam_ctx {
+     char *nss_db;
+     struct sss_certmap_ctx *sss_certmap_ctx;
+     char **smartcard_services;
++
++    char **prompting_config_sections;
++    int num_prompting_config_sections;
+ };
+ 
+ struct pam_auth_dp_req {
+@@ -130,4 +133,7 @@ pam_set_last_online_auth_with_curr_token(struct sss_domain_info *domain,
+ errno_t filter_responses(struct confdb_ctx *cdb,
+                          struct response_data *resp_list,
+                          struct pam_data *pd);
++
++errno_t pam_eval_prompting_config(struct pam_ctx *pctx, struct pam_data *pd);
++
+ #endif /* __PAMSRV_H__ */
+diff --git a/src/responder/pam/pamsrv_cmd.c b/src/responder/pam/pamsrv_cmd.c
+index 6f3a7e56b..6b2dc5bdc 100644
+--- a/src/responder/pam/pamsrv_cmd.c
++++ b/src/responder/pam/pamsrv_cmd.c
+@@ -1003,6 +1003,14 @@ static void pam_reply(struct pam_auth_req *preq)
+         }
+     }
+ 
++    if (pd->cmd == SSS_PAM_PREAUTH) {
++        ret = pam_eval_prompting_config(pctx, pd);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE, "Failed to add prompting information, "
++                                     "using defaults.\n");
++        }
++    }
++
+     /*
+      * Export non-overridden shell to tlog-rec-session when opening the session
+      */
+-- 
+2.19.1
+

@@ -1,0 +1,115 @@
+From 0a637fff4fe575916bdae0eb17b7c36e8427308a Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Wed, 17 Apr 2019 15:07:43 +0200
+Subject: [PATCH] PAM: Also cache SSS_PAM_PREAUTH
+
+Related: https://pagure.io/SSSD/sssd/issue/3960
+
+Even if cached_auth_timeout was set, the pam responder would still
+forward the preauthentication requests to the back end. This could
+trigger unwanted traffic towards the KDCs.
+
+Reviewed-by: Sumit Bose <sbose@redhat.com>
+(cherry picked from commit c911562d1bea8ae44e45e564c9df5df43d87b035)
+---
+ src/man/sssd.conf.5.xml        |  4 +++-
+ src/responder/pam/pamsrv_cmd.c | 40 +++++++++++++++-------------------
+ 2 files changed, 21 insertions(+), 23 deletions(-)
+
+diff --git a/src/man/sssd.conf.5.xml b/src/man/sssd.conf.5.xml
+index 274809e24..1ab7af00b 100644
+--- a/src/man/sssd.conf.5.xml
++++ b/src/man/sssd.conf.5.xml
+@@ -2960,7 +2960,9 @@ subdomain_inherit = ldap_purge_cache_timeout
+                             Specifies time in seconds since last successful
+                             online authentication for which user will be
+                             authenticated using cached credentials while
+-                            SSSD is in the online mode.
++                            SSSD is in the online mode. If the credentials
++                            are incorrect, SSSD falls back to online
++                            authentication.
+                         </para>
+                         <para>
+                             This option's value is inherited by all trusted
+diff --git a/src/responder/pam/pamsrv_cmd.c b/src/responder/pam/pamsrv_cmd.c
+index 6b2dc5bdc..00302be75 100644
+--- a/src/responder/pam/pamsrv_cmd.c
++++ b/src/responder/pam/pamsrv_cmd.c
+@@ -803,8 +803,9 @@ static void pam_reply(struct pam_auth_req *preq)
+         pam_verbosity = DEFAULT_PAM_VERBOSITY;
+     }
+ 
+-    DEBUG(SSSDBG_FUNC_DATA,
+-          "pam_reply called with result [%d]: %s.\n",
++    DEBUG(SSSDBG_TRACE_ALL,
++          "pam_reply initially called with result [%d]: %s. "
++          "this result might be changed during processing\n",
+           pd->pam_status, pam_strerror(NULL, pd->pam_status));
+ 
+     if (pd->cmd == SSS_PAM_AUTHENTICATE
+@@ -886,6 +887,7 @@ static void pam_reply(struct pam_auth_req *preq)
+             break;
+ /* TODO: we need the pam session cookie here to make sure that cached
+  * authentication was successful */
++        case SSS_PAM_PREAUTH:
+         case SSS_PAM_SETCRED:
+         case SSS_PAM_ACCT_MGMT:
+         case SSS_PAM_OPEN_SESSION:
+@@ -1067,6 +1069,8 @@ static void pam_reply(struct pam_auth_req *preq)
+     }
+ 
+ done:
++    DEBUG(SSSDBG_FUNC_DATA, "Returning [%d]: %s to the client\n",
++          pd->pam_status, pam_strerror(NULL, pd->pam_status));
+     sss_cmd_done(cctx, preq);
+ }
+ 
+@@ -1949,21 +1953,6 @@ done:
+     return ret;
+ }
+ 
+-static bool pam_is_cmd_cachable(int cmd)
+-{
+-    bool is_cachable;
+-
+-    switch(cmd) {
+-    case SSS_PAM_AUTHENTICATE:
+-        is_cachable = true;
+-        break;
+-    default:
+-        is_cachable = false;
+-    }
+-
+-    return is_cachable;
+-}
+-
+ static bool pam_is_authtok_cachable(struct sss_auth_token *authtok)
+ {
+     enum sss_authtok_type type;
+@@ -1988,11 +1977,18 @@ static bool pam_can_user_cache_auth(struct sss_domain_info *domain,
+     errno_t ret;
+     bool result = false;
+ 
+-    if (!cached_auth_failed /* don't try cached auth again */
+-            && domain->cache_credentials
+-            && domain->cached_auth_timeout > 0
+-            && pam_is_authtok_cachable(authtok)
+-            && pam_is_cmd_cachable(pam_cmd)) {
++    if (cached_auth_failed) {
++        /* Do not retry indefinitely */
++        return false;
++    }
++
++    if (!domain->cache_credentials || domain->cached_auth_timeout <= 0) {
++        return false;
++    }
++
++    if (pam_cmd == SSS_PAM_PREAUTH
++        || (pam_cmd == SSS_PAM_AUTHENTICATE
++            && pam_is_authtok_cachable(authtok))) {
+ 
+         ret = pam_is_last_online_login_fresh(domain, user,
+                                              domain->cached_auth_timeout,
+-- 
+2.19.2
+

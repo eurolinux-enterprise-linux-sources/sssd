@@ -112,16 +112,15 @@ systemctl enable sssd-kcm.socket
     <refsect1 id='storage'>
         <title>СХОВИЩЕ КЕШУ РЕЄСТРАЦІЙНИХ ДАНИХ</title>
         <para>
-            Кеші реєстраційних даних зберігаються у сховищі служби реєстраційних даних
-SSSD (докладніший опис наведено на сторінці підручника <citerefentry>
+            The credential caches are stored in the SSSD secrets service (see
+<citerefentry>
 <refentrytitle>sssd-secrets</refentrytitle><manvolnum>5</manvolnum>
-</citerefentry>). Тому важливо, щоб було увімкнено службу sssd-secrets, а її
-сокет був доступним: <programlisting>
+</citerefentry> for more details). Therefore it is important that also the
+sssd-secrets service is enabled and its socket is started: <programlisting>
 systemctl start sssd-secrets.socket
 systemctl enable sssd-secrets.socket
-            </programlisting> Відповідні
-залежності між цими службами вже мало бути встановлено засобами вашого
-дистрибутива.
+            </programlisting> Your distribution should already set the
+dependencies between the services.
         </para>
     </refsect1>
 

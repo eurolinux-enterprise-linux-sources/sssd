@@ -194,6 +194,39 @@ LDAP. Підтримки визначення декількох значень 
                 </varlistentry>
 
                 <varlistentry>
+                    <term>ldap_pwmodify_mode (string)</term>
+                    <listitem>
+                        <para>
+                            Specify the operation that is used to modify user password.
+                        </para>
+                        <para>
+                            Two modes are currently supported:
+                            <itemizedlist>
+                                <listitem>
+                                    <para>
+                                        exop - Password Modify Extended Operation (RFC 3062)
+                                    </para>
+                                </listitem>
+                                <listitem>
+                                    <para>
+                                        ldap_modify - Direct modification of userPassword (not recommended).
+                                    </para>
+                                </listitem>
+                            </itemizedlist>
+                        </para>
+                        <para>
+                            Note: First, a new connection is established to verify current password by
+binding as the user that requested password change. If successful, this
+connection is used to change the password therefore the user must have write
+access to userPassword attribute.
+                        </para>
+                        <para>
+                            Default: exop
+                        </para>
+                    </listitem>
+                </varlistentry>
+
+                <varlistentry>
                     <term>ldap_default_bind_dn (рядок)</term>
                     <listitem>
                         <para>
@@ -968,26 +1001,24 @@ ipaUniqueID для IPA
                     <term>ldap_groups_use_matching_rule_in_chain</term>
                     <listitem>
                         <para>
-                            За допомогою цього параметра можна наказати SSSD скористатися перевагами
-специфічної для Active Directory можливості, яка надає змогу пришвидшити дії
-з пошуку груп у мережах зі складною системою груп або системою груп з
-високим рівнем вкладеності.
+                            This option tells SSSD to take advantage of an Active Directory-specific
+feature which may speed up group lookup operations on deployments with
+complex or deep nested groups.
                         </para>
                         <para>
-                            Здебільшого, не варто вмикати цю можливість. Пришвидшення за її допомогою
-можна буде спостерігати лише у дуже складних випадках вкладеності груп.
+                            In most common cases, it is best to leave this option disabled. It generally
+only provides a performance increase on very complex nestings.
                         </para>
                         <para>
-                            Якщо увімкнено цей параметр, SSSD використовуватиме можливість, якщо під час
-початкового сеансу з’єднання виявить, що на сервері передбачено підтримку
-можливості. Отже, насправді значення «True» означає «визначити автоматично».
+                            If this option is enabled, SSSD will use it if it detects that the server
+supports it during initial connection. So "True" here essentially means
+"auto-detect".
                         </para>
                         <para>
-                            Зауваження: відомо, що у поточній версії цією можливістю можна скористатися
-лише для Active Directory 2008 R1 та пізніших версій. Докладніше про це
-можна дізнатися з <ulink
-url="http://msdn.microsoft.com/en-us/library/windows/desktop/aa746475%28v=vs.85%29.aspx">документації
-MSDN(TM)</ulink>.
+                            Note: This feature is currently known to work only with Active Directory
+2008 R1 and later. See <ulink
+url="http://msdn.microsoft.com/en-us/library/windows/desktop/aa746475%28v=vs.85%29.aspx">
+MSDN(TM) documentation</ulink> for more details.
                         </para>
                         <para>
                             Типове значення: False
@@ -999,23 +1030,20 @@ MSDN(TM)</ulink>.
                     <term>ldap_initgroups_use_matching_rule_in_chain</term>
                     <listitem>
                         <para>
-                            За допомогою цього параметра можна наказати SSSD скористатися перевагами
-специфічної для Active Directory можливості, яка може пришвидшити дії з
-початковими групами (initgroups). Особливо помітним таке пришвидшення є у
-системах зі складною системою груп або системою груп з високим рівнем
-вкладеності.
+                            This option tells SSSD to take advantage of an Active Directory-specific
+feature which might speed up initgroups operations (most notably when
+dealing with complex or deep nested groups).
                         </para>
                         <para>
-                            Якщо увімкнено цей параметр, SSSD використовуватиме можливість, якщо під час
-початкового сеансу з’єднання виявить, що на сервері передбачено підтримку
-можливості. Отже, насправді значення «True» означає «визначити автоматично».
+                            If this option is enabled, SSSD will use it if it detects that the server
+supports it during initial connection. So "True" here essentially means
+"auto-detect".
                         </para>
                         <para>
-                            Зауваження: відомо, що у поточній версії цією можливістю можна скористатися
-лише для Active Directory 2008 R1 та пізніших версій. Докладніше про це
-можна дізнатися з <ulink
-url="http://msdn.microsoft.com/en-us/library/windows/desktop/aa746475%28v=vs.85%29.aspx">документації
-MSDN(TM)</ulink>.
+                            Note: This feature is currently known to work only with Active Directory
+2008 R1 and later. See <ulink
+url="http://msdn.microsoft.com/en-us/library/windows/desktop/aa746475%28v=vs.85%29.aspx">
+MSDN(TM) documentation</ulink> for more details.
                         </para>
                         <para>
                             Типове значення: False
@@ -1627,12 +1655,21 @@ ldap_group_gid_number.
                     <term>ldap_sasl_authid (рядок)</term>
                     <listitem>
                         <para>
-                            Визначає ідентифікатор уповноваження SASL, який слід використовувати. Якщо
-використано GSSAPI, відповідає реєстраційному запису Kerberos, який
-використовується для розпізнавання під час доступу до каталогу. У цьому
-параметрів можуть зберігатися або реєстраційні дані повністю (наприклад
-host/myhost@EXAMPLE.COM) або лише назва реєстраційного запису (наприклад
-host/myhost).
+                            Визначає ідентифікатор уповноваження SASL, яким слід скористатися. Якщо
+використовується GSSAPI, цим ідентифікатором є реєстраційні дані Kerberos,
+які використовуються для розпізнавання при доступі до каталогу. Цей параметр
+може містити або повні реєстраційні дані (наприклад host/myhost@EXAMPLE.COM)
+або просто назву реєстраційного запису (наприклад host/myhost). Типово,
+значення не встановлено і використовуються такі реєстраційні записи:
+<programlisting>
+hostname@REALM
+netbiosname$@REALM
+host/hostname@REALM
+*$@REALM
+host/*@REALM
+host/*
+                            </programlisting> Якщо жоден з них не буде
+знайдено, буде повернуто перший реєстраційний запис у таблиці ключів.
                         </para>
                         <para>
                             Типове значення: вузол/назва_вузла@ОБЛАСТЬ

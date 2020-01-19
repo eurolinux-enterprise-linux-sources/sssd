@@ -75,23 +75,24 @@ Directory. Засіб надання даних AD приймає ті самі 
 <quote>ad</quote>.
         </para>
         <para>
-            By default, the AD provider will map UID and GID values from the objectSID
-parameter in Active Directory. For details on this, see the <quote>ID
-MAPPING</quote> section below. If you want to disable ID mapping and instead
-rely on POSIX attributes defined in Active Directory, you should set
+            Типово, модуль надання даних AD виконуватиме прив’язку до значень UID та GID
+з параметра objectSID у Active Directory. Докладніший опис наведено у
+розділі «ВСТАНОВЛЕННЯ ВІДПОВІДНОСТІ ІДЕНТИФІКАТОРІВ». Якщо вам потрібно
+вимкнути встановлення відповідності ідентифікаторів і покладатися на
+атрибути POSIX, визначені у Active Directory, вам слід встановити
 <programlisting>
 ldap_id_mapping = False
-            </programlisting> If POSIX attributes should be
-used, it is recommended for performance reasons that the attributes are also
-replicated to the Global Catalog. If POSIX attributes are replicated, SSSD
-will attempt to locate the domain of a requested numerical ID with the help
-of the Global Catalog and only search that domain. In contrast, if POSIX
-attributes are not replicated to the Global Catalog, SSSD must search all
-the domains in the forest sequentially. Please note that the
-<quote>cache_first</quote> option might be also helpful in speeding up
-domainless searches.  Note that if only a subset of POSIX attributes is
-present in the Global Catalog, the non-replicated attributes are currently
-not read from the LDAP port.
+            </programlisting> Якщо має бути використано
+атрибути POSIX, рекомендуємо з міркувань швидкодії виконувати також
+реплікацію атрибутів до загального каталогу. Якщо виконується реплікація
+атрибутів POSIX, SSSD намагатиметься знайти домен числового ідентифікатора
+із запиту за допомогою загального каталогу і шукатиме лише цей домен. І
+навпаки, якщо реплікація атрибутів POSIX до загального каталогу не
+відбувається, SSSD доводиться шукати на усіх доменах у лісі послідовно. Будь
+ласка, зауважте, що для пришвидшення пошуку без доменів також може бути
+корисним використання параметра <quote>cache_first</quote>. Зауважте, що
+якщо у загальному каталозі є лише підмножина атрибутів POSIX, у поточній
+версії невідтворювані атрибути з порту LDAP не читатимуться.
         </para>
         <para>
             Дані щодо користувачів, груп та інших записів, які обслуговуються SSSD, у
@@ -379,6 +380,26 @@ enforcing.
                 </varlistentry>
 
                 <varlistentry>
+                    <term>ad_gpo_implicit_deny (булеве значення)</term>
+                    <listitem>
+                        <para>
+                            Зазвичай, якщо не буде знайдено відповідних GPO, користувачам буде надано
+доступ. Якщо для цього параметра встановлено значення True, доступ
+користувачам надаватиметься, лише якщо його явним чином дозволено правилом
+GPO. Якщо ж такого дозвільного правила не буде виявлено, доступ буде
+заборонено. Цим можна скористатися для підвищення рівня захисту, але слід
+бути обережним із використанням цього параметра, оскільки за його допомогою
+можна заборонити доступ навіть користувачам у вбудованій групі
+Administrators, якщо немає правил GPO, якими надається такий доступ.
+                        </para>
+                        <para>
+                            Default: False (seconds)
+                        </para>
+                    </listitem>
+                </varlistentry>
+
+
+                <varlistentry>
                     <term>ad_gpo_cache_timeout (ціле число)</term>
                     <listitem>
                         <para>
@@ -592,6 +613,7 @@ job»).
 ad_gpo_map_batch = +my_pam_service, -crond
                             </programlisting>
                         </para>
+                        <para>Зауваження: назва служби cron у різних дистрибутивах Linux може бути різною.</para>
                         <para>
                             Типове значення: типовий набір назв служб PAM складається з таких значень:
                             <itemizedlist>

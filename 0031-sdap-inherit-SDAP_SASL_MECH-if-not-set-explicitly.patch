@@ -1,0 +1,209 @@
+From 373b1136ccb3bf54f32d47473e8120d0258f8405 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Tue, 21 May 2019 10:22:04 +0200
+Subject: [PATCH 31/31] sdap: inherit SDAP_SASL_MECH if not set explicitly
+
+If ldap_sasl_mech is set for the configured domain in sssd.conf the
+value is inherited automatically to all sub-domains. The can be
+overwritten by setting ldap_sasl_mech for a given sub-domain explicitly
+in sssd.conf.
+
+Related to https://pagure.io/SSSD/sssd/issue/4006
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 070f22f896b909c140ed7598aed2393d61a834ae)
+---
+ src/config/cfg_rules.ini                  |  1 +
+ src/man/sssd-ldap.5.xml                   | 10 ++++++
+ src/man/sssd.conf.5.xml                   |  1 +
+ src/providers/ad/ad_common.c              | 38 +++++++++++++++++++++++
+ src/providers/ad/ad_common.h              |  5 +++
+ src/providers/ad/ad_subdomains.c          | 18 ++++++++++-
+ src/providers/ipa/ipa_subdomains_server.c | 19 +++++++++++-
+ 7 files changed, 90 insertions(+), 2 deletions(-)
+
+diff --git a/src/config/cfg_rules.ini b/src/config/cfg_rules.ini
+index 603211711..3976ec4e1 100644
+--- a/src/config/cfg_rules.ini
++++ b/src/config/cfg_rules.ini
+@@ -753,6 +753,7 @@ option = ldap_user_search_base
+ option = ldap_group_search_base
+ option = ldap_netgroup_search_base
+ option = ldap_service_search_base
++option = ldap_sasl_mech
+ option = ad_server
+ option = ad_backup_server
+ option = ad_site
+diff --git a/src/man/sssd-ldap.5.xml b/src/man/sssd-ldap.5.xml
+index 17c5523c0..fadd05cb7 100644
+--- a/src/man/sssd-ldap.5.xml
++++ b/src/man/sssd-ldap.5.xml
+@@ -1808,6 +1808,16 @@
+                             Specify the SASL mechanism to use.  Currently only
+                             GSSAPI and GSS-SPNEGO are tested and supported.
+                         </para>
++                        <para>
++                            If the backend supports sub-domains the value of
++                            ldap_sasl_mech is automatically inherited to the
++                            sub-domains. If a different value is needed for a
++                            sub-domain it can be overwritten by setting
++                            ldap_sasl_mech for this sub-domain explicitly.
++                            Please see TRUSTED DOMAIN SECTION in
++                            <citerefentry><refentrytitle>sssd.conf</refentrytitle>
++                            <manvolnum>5</manvolnum></citerefentry> for details.
++                        </para>
+                         <para>
+                             Default: not set
+                         </para>
+diff --git a/src/man/sssd.conf.5.xml b/src/man/sssd.conf.5.xml
+index 1ab7af00b..3f05b3942 100644
+--- a/src/man/sssd.conf.5.xml
++++ b/src/man/sssd.conf.5.xml
+@@ -3356,6 +3356,7 @@ ldap_user_extra_attrs = phone:telephoneNumber
+             <para>ldap_group_search_base,</para>
+             <para>ldap_netgroup_search_base,</para>
+             <para>ldap_service_search_base,</para>
++            <para>ldap_sasl_mech,</para>
+             <para>ad_server,</para>
+             <para>ad_backup_server,</para>
+             <para>ad_site,</para>
+diff --git a/src/providers/ad/ad_common.c b/src/providers/ad/ad_common.c
+index 19d4b3d5a..1b8b1df19 100644
+--- a/src/providers/ad/ad_common.c
++++ b/src/providers/ad/ad_common.c
+@@ -1455,3 +1455,41 @@ ad_user_conn_list(TALLOC_CTX *mem_ctx,
+ 
+     return clist;
+ }
++
++errno_t ad_inherit_opts_if_needed(struct dp_option *parent_opts,
++                                  struct dp_option *suddom_opts,
++                                  struct confdb_ctx *cdb,
++                                  const char *subdom_conf_path,
++                                  int opt_id)
++{
++    int ret;
++    const char *parent_val = NULL;
++    char *dummy = NULL;
++    char *option_list[2] = { NULL, NULL };
++
++    parent_val = dp_opt_get_cstring(parent_opts, opt_id);
++    if (parent_val != NULL) {
++        ret = confdb_get_string(cdb, NULL, subdom_conf_path,
++                                parent_opts[opt_id].opt_name, NULL, &dummy);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE, "confdb_get_string failed.\n");
++            goto done;
++        }
++
++        if (dummy == NULL) {
++            DEBUG(SSSDBG_CONF_SETTINGS,
++                  "Option [%s] is set in parent domain but not set for "
++                  "sub-domain trying to set it to [%s].\n",
++                  parent_opts[opt_id].opt_name, parent_val);
++            option_list[0] = discard_const(parent_opts[opt_id].opt_name);
++            dp_option_inherit(option_list, opt_id, parent_opts, suddom_opts);
++        }
++    }
++
++    ret = EOK;
++
++done:
++    talloc_free(dummy);
++
++    return ret;
++}
+diff --git a/src/providers/ad/ad_common.h b/src/providers/ad/ad_common.h
+index 638465958..2f624df3d 100644
+--- a/src/providers/ad/ad_common.h
++++ b/src/providers/ad/ad_common.h
+@@ -216,4 +216,9 @@ errno_t netlogon_get_domain_info(TALLOC_CTX *mem_ctx,
+                                  char **_site,
+                                  char **_forest);
+ 
++errno_t ad_inherit_opts_if_needed(struct dp_option *parent_opts,
++                                  struct dp_option *suddom_opts,
++                                  struct confdb_ctx *cdb,
++                                  const char *subdom_conf_path,
++                                  int opt_id);
+ #endif /* AD_COMMON_H_ */
+diff --git a/src/providers/ad/ad_subdomains.c b/src/providers/ad/ad_subdomains.c
+index b4ad347e4..b4e09fb7e 100644
+--- a/src/providers/ad/ad_subdomains.c
++++ b/src/providers/ad/ad_subdomains.c
+@@ -305,13 +305,29 @@ ad_subdom_ad_ctx_new(struct be_ctx *be_ctx,
+                                               realm,
+                                               subdom,
+                                               hostname, keytab);
+-    talloc_free(subdom_conf_path);
+     if (ad_options == NULL) {
+         DEBUG(SSSDBG_OP_FAILURE, "Cannot initialize AD options\n");
+         talloc_free(ad_options);
++        talloc_free(subdom_conf_path);
+         return ENOMEM;
+     }
+ 
++    ret = ad_inherit_opts_if_needed(id_ctx->sdap_id_ctx->opts->basic,
++                                    ad_options->id->basic,
++                                    be_ctx->cdb, subdom_conf_path,
++                                    SDAP_SASL_MECH);
++    talloc_free(subdom_conf_path);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "Failed to inherit option [%s] to sub-domain [%s]. "
++              "This error is ignored but might cause issues or unexpected "
++              "behavior later on.\n",
++              id_ctx->ad_options->id->basic[SDAP_SASL_MECH].opt_name,
++              subdom->name);
++
++        return ret;
++    }
++
+     ad_site_override = dp_opt_get_string(ad_options->basic, AD_SITE);
+ 
+     gc_service_name = talloc_asprintf(ad_options, "sd_gc_%s", subdom->name);
+diff --git a/src/providers/ipa/ipa_subdomains_server.c b/src/providers/ipa/ipa_subdomains_server.c
+index 1d480e52b..d0e89a4f9 100644
+--- a/src/providers/ipa/ipa_subdomains_server.c
++++ b/src/providers/ipa/ipa_subdomains_server.c
+@@ -172,6 +172,7 @@ static struct ad_options *ipa_ad_options_new(struct be_ctx *be_ctx,
+     const char *forest;
+     const char *forest_realm;
+     char *subdom_conf_path;
++    int ret;
+ 
+     /* Trusts are only established with forest roots */
+     direction = subdom->forest_root->trust_direction;
+@@ -196,12 +197,28 @@ static struct ad_options *ipa_ad_options_new(struct be_ctx *be_ctx,
+         DEBUG(SSSDBG_CRIT_FAILURE, "Unsupported trust direction!\n");
+         ad_options = NULL;
+     }
+-    talloc_free(subdom_conf_path);
+ 
+     if (ad_options == NULL) {
+         DEBUG(SSSDBG_OP_FAILURE, "Cannot initialize AD options\n");
++        talloc_free(subdom_conf_path);
+         return NULL;
+     }
++
++    ret = ad_inherit_opts_if_needed(id_ctx->ipa_options->id->basic,
++                                    ad_options->id->basic, be_ctx->cdb,
++                                    subdom_conf_path, SDAP_SASL_MECH);
++    talloc_free(subdom_conf_path);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_CRIT_FAILURE,
++              "Failed to inherit option [%s] to sub-domain [%s]. "
++              "This error is ignored but might cause issues or unexpected "
++              "behavior later on.\n",
++              id_ctx->ipa_options->id->basic[SDAP_SASL_MECH].opt_name,
++              subdom->name);
++
++        return NULL;
++    }
++
+     return ad_options;
+ }
+ 
+-- 
+2.20.1
+

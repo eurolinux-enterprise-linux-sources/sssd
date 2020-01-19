@@ -1,4 +1,23 @@
 #!/usr/bin/env python
+#  SSSD
+#
+#  SSSD HBAC python API tests
+#
+#  Copyright (C) Red Hat
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 from __future__ import print_function
 
 import unittest
@@ -141,13 +160,13 @@ class PyHbacRuleElementTest(unittest.TestCase):
 
     def testRepr(self):
         el = pyhbac.HbacRuleElement()
-        self.assertEquals(el.__repr__(), u'<category 0 names [] groups []>')
+        self.assertEqual(el.__repr__(), u'<category 0 names [] groups []>')
 
         el.category.add(pyhbac.HBAC_CATEGORY_ALL)
         el.names = ['foo']
         el.groups = ['bar, baz']
-        self.assertEquals(el.__repr__(),
-                          u'<category 1 names [foo] groups [bar, baz]>')
+        self.assertEqual(el.__repr__(),
+                         u'<category 1 names [foo] groups [bar, baz]>')
 
 
 class PyHbacRuleTest(unittest.TestCase):

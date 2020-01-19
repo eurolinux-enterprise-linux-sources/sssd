@@ -13,7 +13,7 @@ search_base[?scope?[filter][?search_base?scope?[filter]]*]
 as specified in section 4.5.1.2 of http://tools.ietf.org/html/rfc4511
     </para>
     <para>
-        The filter must be a valid LDAP search filter as specified by
+        Filtret måste vara ett korrekt LDAP-sökfilter som specificerat i
 http://www.ietf.org/rfc/rfc2254.txt
     </para>
     <para>

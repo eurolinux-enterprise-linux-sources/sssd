@@ -1,0 +1,77 @@
+From cb94d00f31d1d6b6fcaa69dbaa928031d2e7c092 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Fri, 24 May 2019 09:18:25 +0200
+Subject: [PATCH 28/29] DP: add NULL check to be_ptask_{enable|disable}
+
+Currently the files and the proxy provider do not provide a check online
+method (DPM_CHECK_ONLINE). The files provider because it can never go
+offline. The proxy provider because there is no generic way to check
+since the nature of the actual provider is unknown.
+
+Since the method is missing check_if_online() jumps into the error
+handling block were we try to reset the offline state
+unconditionally. If there is no check_if_online_ptask, which never
+exists for the files provider and will not be available in the proxy
+provider as long as the backend is online, be_ptask_{enable|disable}
+will be called with a NULL pointer.
+
+Related to https://pagure.io/SSSD/sssd/issue/4014
+
+Reviewed-by: Tomas Halman <thalman@redhat.com>
+Reviewed-by: Alexey Tikhonov <atikhono@redhat.com>
+(cherry picked from commit 2720d97ce2559a3a382caf8f669820f64d6097fe)
+---
+ src/providers/be_ptask.c | 29 +++++++++++++++++------------
+ 1 file changed, 17 insertions(+), 12 deletions(-)
+
+diff --git a/src/providers/be_ptask.c b/src/providers/be_ptask.c
+index dc3c57db5..c43351755 100644
+--- a/src/providers/be_ptask.c
++++ b/src/providers/be_ptask.c
+@@ -352,26 +352,31 @@ done:
+ 
+ void be_ptask_enable(struct be_ptask *task)
+ {
+-    if (task->enabled) {
+-        DEBUG(SSSDBG_MINOR_FAILURE, "Task [%s]: already enabled\n",
+-                                     task->name);
+-        return;
+-    }
++    if (task != NULL) {
++        if (task->enabled) {
++            DEBUG(SSSDBG_MINOR_FAILURE, "Task [%s]: already enabled\n",
++                                         task->name);
++            return;
++        }
+ 
+-    DEBUG(SSSDBG_TRACE_FUNC, "Task [%s]: enabling task\n", task->name);
++        DEBUG(SSSDBG_TRACE_FUNC, "Task [%s]: enabling task\n", task->name);
+ 
+-    task->enabled = true;
+-    be_ptask_schedule(task, BE_PTASK_ENABLED_DELAY, BE_PTASK_SCHEDULE_FROM_NOW);
++        task->enabled = true;
++        be_ptask_schedule(task, BE_PTASK_ENABLED_DELAY,
++                          BE_PTASK_SCHEDULE_FROM_NOW);
++    }
+ }
+ 
+ /* Disable the task, but if a request already in progress, let it finish. */
+ void be_ptask_disable(struct be_ptask *task)
+ {
+-    DEBUG(SSSDBG_TRACE_FUNC, "Task [%s]: disabling task\n", task->name);
++    if (task != NULL) {
++        DEBUG(SSSDBG_TRACE_FUNC, "Task [%s]: disabling task\n", task->name);
+ 
+-    talloc_zfree(task->timer);
+-    task->enabled = false;
+-    task->period = task->orig_period;
++        talloc_zfree(task->timer);
++        task->enabled = false;
++        task->period = task->orig_period;
++    }
+ }
+ 
+ void be_ptask_destroy(struct be_ptask **task)
+-- 
+2.20.1
+

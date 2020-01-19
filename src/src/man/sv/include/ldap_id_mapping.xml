@@ -1,26 +1,26 @@
 <refsect1 id='idmap'>
-    <title>ID MAPPING</title>
+    <title>ID-MAPPNING</title>
     <para>
-        The ID-mapping feature allows SSSD to act as a client of Active Directory
-without requiring administrators to extend user attributes to support POSIX
-attributes for user and group identifiers.
+        ID-mappningsfunktionen låter SSD fungera som en klient till Active Directory
+utan att kräva att administratörer utökar användarattribut till att stödja
+POSIX-attribut för användar- och gruppidentifierare.
     </para>
     <para>
-        NOTE: When ID-mapping is enabled, the uidNumber and gidNumber attributes are
-ignored. This is to avoid the possibility of conflicts between
-automatically-assigned and manually-assigned values. If you need to use
-manually-assigned values, ALL values must be manually-assigned.
+        OBSERVERA: När ID-mappning aktiveras ignoreras attributen uidNumber och
+gidNumber.  Detta är för att undvika möjligheten av konflikt mellan
+automatiskt tilldelade och manuellt tilldelade värden.  Om du behöver
+använda manuellt tilldelade värden måste ALLA värden tilldelas manuellt.
     </para>
     <para>
-        Please note that changing the ID mapping related configuration options will
-cause user and group IDs to change. At the moment, SSSD does not support
-changing IDs, so the SSSD database must be removed. Because cached passwords
-are also stored in the database, removing the database should only be
-performed while the authentication servers are reachable, otherwise users
-might get locked out. In order to cache the password, an authentication must
-be performed. It is not sufficient to use <citerefentry>
-<refentrytitle>sss_cache</refentrytitle> <manvolnum>8</manvolnum>
-</citerefentry> to remove the database, rather the process consists of:
+        Observera att byte av ID-mappnings relaterade konfigurationsalternativ
+kommer få användar- och grupp-ID:n att ändras.  För närvarande stödjer inte
+SSSD byte av ID:n, så SSSD-databasen moste tas bort.  Eftersom cachade
+lösenord också lagras i databasen skall databasen bara tas bort när
+autentiseringsservrarna kan nås, annars kan användare låsas ute.  För att
+cacha lösenordet måste en autentisering göras.  Det är inte tillräckligt att
+använda <citerefentry> <refentrytitle>sss_cache</refentrytitle>
+<manvolnum>8</manvolnum> </citerefentry> för att ta bort databasen, istället
+består processen av:
             <itemizedlist>
                 <listitem>
                     <para>
@@ -181,7 +181,7 @@ domain will always be assigned to slice zero in the ID map, bypassing the
 murmurhash algorithm described above.
                         </para>
                         <para>
-                            Default: not set
+                            Standard: inte satt
                         </para>
                     </listitem>
                 </varlistentry>
@@ -192,7 +192,7 @@ murmurhash algorithm described above.
                             Specify the name of the default domain.
                         </para>
                         <para>
-                            Default: not set
+                            Standard: inte satt
                         </para>
                     </listitem>
                 </varlistentry>
@@ -233,7 +233,7 @@ generated so far. If value of ldap_idmap_helper_table_size is equal to 0
 then no additional secondary slices are generated.
                         </para>
                         <para>
-                            Default: 10
+                            Standard: 10
                         </para>
                     </listitem>
                 </varlistentry>

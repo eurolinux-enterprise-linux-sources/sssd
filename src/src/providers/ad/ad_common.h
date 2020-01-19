@@ -52,6 +52,7 @@ enum ad_basic_opt {
     AD_ACCESS_FILTER,
     AD_ENABLE_GC,
     AD_GPO_ACCESS_CONTROL,
+    AD_GPO_IMPLICIT_DENY,
     AD_GPO_CACHE_TIMEOUT,
     AD_GPO_MAP_INTERACTIVE,
     AD_GPO_MAP_REMOTE_INTERACTIVE,
@@ -144,6 +145,7 @@ ad_failover_init(TALLOC_CTX *mem_ctx, struct be_ctx *ctx,
                  const char *ad_service,
                  const char *ad_gc_service,
                  const char *ad_domain,
+                 bool use_kdcinfo,
                  struct ad_service **_service);
 
 errno_t

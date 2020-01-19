@@ -936,13 +936,12 @@ static int confdb_get_domain_internal(struct confdb_ctx *cdb,
         goto done;
     }
 
-    ret = get_entry_as_bool(res->msgs[0], &domain->mpg,
-                            CONFDB_DOMAIN_AUTO_UPG, 0);
-    if (ret != EOK) {
-        DEBUG(SSSDBG_FATAL_FAILURE,
-              "Invalid value for %s\n", CONFDB_DOMAIN_AUTO_UPG);
-        goto done;
+    tmp = ldb_msg_find_attr_as_string(res->msgs[0], CONFDB_DOMAIN_AUTO_UPG, NULL);
+    if (tmp == NULL || *tmp == '\0') {
+        tmp = "false";
     }
+
+    domain->mpg_mode = str_to_domain_mpg_mode(tmp);
 
     if (strcasecmp(domain->provider, "local") == 0) {
         /* If this is the local provider, we need to ensure that
@@ -980,7 +979,7 @@ static int confdb_get_domain_internal(struct confdb_ctx *cdb,
         }
 
         /* The LOCAL provider use always Magic Private Groups */
-        domain->mpg = true;
+        domain->mpg_mode = MPG_ENABLED;
     }
 
     domain->timeout = ldb_msg_find_attr_as_int(res->msgs[0],
@@ -998,7 +997,7 @@ static int confdb_get_domain_internal(struct confdb_ctx *cdb,
                   "Interpreting as true\n", domain->name);
         domain->enumerate = true;
     } else { /* assume the new format */
-        enum_default = strcasecmp(domain->provider, "files") == 0 ? true : false;
+        enum_default = is_files_provider(domain);
 
         ret = get_entry_as_bool(res->msgs[0], &domain->enumerate,
                                 CONFDB_DOMAIN_ENUMERATE, enum_default);
@@ -1009,7 +1008,7 @@ static int confdb_get_domain_internal(struct confdb_ctx *cdb,
         }
     }
 
-    if (strcasecmp(domain->provider, "files") == 0) {
+    if (is_files_provider(domain)) {
         /* The password field must be reported as 'x', else pam_unix won't
          * authenticate this entry. See man pwconv(8) for more details.
          */
@@ -1283,7 +1282,9 @@ static int confdb_get_domain_internal(struct confdb_ctx *cdb,
 
     tmp = ldb_msg_find_attr_as_string(res->msgs[0],
                                       CONFDB_NSS_OVERRIDE_HOMEDIR, NULL);
-    if (tmp != NULL) {
+    /* Here we skip the files provider as it should always return *only*
+     * what's in the files and nothing else. */
+    if (tmp != NULL && !is_files_provider(domain)) {
         domain->override_homedir = talloc_strdup(domain, tmp);
         if (!domain->override_homedir) {
             ret = ENOMEM;
@@ -1298,6 +1299,15 @@ static int confdb_get_domain_internal(struct confdb_ctx *cdb,
         if (!domain->fallback_homedir) {
             ret = ENOMEM;
             goto done;
+        }
+    } else {
+        if (strcasecmp(domain->provider, "ad") == 0) {
+            /* ad provider default */
+            domain->fallback_homedir = talloc_strdup(domain, "/home/%d/%u");
+            if (!domain->fallback_homedir) {
+                ret = ENOMEM;
+                goto done;
+            }
         }
     }
 
@@ -1324,7 +1334,9 @@ static int confdb_get_domain_internal(struct confdb_ctx *cdb,
 
     tmp = ldb_msg_find_attr_as_string(res->msgs[0],
                                       CONFDB_NSS_OVERRIDE_SHELL, NULL);
-    if (tmp != NULL) {
+    /* Here we skip the files provider as it should always return *only*
+     * what's in the files and nothing else. */
+    if (tmp != NULL && !is_files_provider(domain)) {
         domain->override_shell = talloc_strdup(domain, tmp);
         if (!domain->override_shell) {
             ret = ENOMEM;
@@ -1491,7 +1503,7 @@ int confdb_get_domains(struct confdb_ctx *cdb,
                                     CONFDB_MONITOR_ACTIVE_DOMAINS,
                                     &domlist);
     if (ret == ENOENT) {
-        DEBUG(SSSDBG_FATAL_FAILURE, "No domains configured, fatal error!\n");
+        DEBUG(SSSDBG_MINOR_FAILURE, "No domains configured, fatal error!\n");
         goto done;
     }
     if (ret != EOK ) {

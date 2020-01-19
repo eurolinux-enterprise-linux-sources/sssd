@@ -1,0 +1,62 @@
+From 5ad7f5e817b2bd8ca0f49b1001f4fb987de32c08 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Pavel=20B=C5=99ezina?= <pbrezina@redhat.com>
+Date: Wed, 27 Feb 2019 14:04:54 +0100
+Subject: [PATCH 5/6] ipa: store sudo runas attribute with internal fqname
+
+We need to be able to differentiate between external users and IPA user.
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3957
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit d411febc98da36eb961b9251c1674af802151786)
+---
+ src/providers/ipa/ipa_sudo_conversion.c | 25 +++++++++++++++++++++++--
+ 1 file changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/src/providers/ipa/ipa_sudo_conversion.c b/src/providers/ipa/ipa_sudo_conversion.c
+index bfa66b2c6..9586e6a2a 100644
+--- a/src/providers/ipa/ipa_sudo_conversion.c
++++ b/src/providers/ipa/ipa_sudo_conversion.c
+@@ -908,6 +908,27 @@ convert_group(TALLOC_CTX *mem_ctx,
+     return rdn;
+ }
+ 
++static const char *
++convert_group_fqdn(TALLOC_CTX *mem_ctx,
++                   struct ipa_sudo_conv *conv,
++                   const char *value,
++                   bool *skip_entry)
++{
++    const char *shortname = NULL;
++    char *fqdn = NULL;
++
++    *skip_entry = false;
++
++    shortname = convert_group(mem_ctx, conv, value, skip_entry);
++    if (shortname == NULL) {
++        return NULL;
++    }
++
++    fqdn = sss_create_internal_fqname(mem_ctx, shortname, conv->dom->name);
++    talloc_free(discard_const(shortname));
++    return fqdn;
++}
++
+ static const char *
+ convert_runasextusergroup(TALLOC_CTX *mem_ctx,
+                           struct ipa_sudo_conv *conv,
+@@ -954,8 +975,8 @@ convert_attributes(struct ipa_sudo_conv *conv,
+     } table[] = {{SYSDB_NAME,                            SYSDB_SUDO_CACHE_AT_CN         , NULL},
+                  {SYSDB_IPA_SUDORULE_HOST,               SYSDB_SUDO_CACHE_AT_HOST       , convert_host},
+                  {SYSDB_IPA_SUDORULE_USER,               SYSDB_SUDO_CACHE_AT_USER       , convert_user_fqdn},
+-                 {SYSDB_IPA_SUDORULE_RUNASUSER,          SYSDB_SUDO_CACHE_AT_RUNASUSER  , convert_user},
+-                 {SYSDB_IPA_SUDORULE_RUNASGROUP,         SYSDB_SUDO_CACHE_AT_RUNASGROUP , convert_group},
++                 {SYSDB_IPA_SUDORULE_RUNASUSER,          SYSDB_SUDO_CACHE_AT_RUNASUSER  , convert_user_fqdn},
++                 {SYSDB_IPA_SUDORULE_RUNASGROUP,         SYSDB_SUDO_CACHE_AT_RUNASGROUP , convert_group_fqdn},
+                  {SYSDB_IPA_SUDORULE_OPTION,             SYSDB_SUDO_CACHE_AT_OPTION     , NULL},
+                  {SYSDB_IPA_SUDORULE_NOTAFTER,           SYSDB_SUDO_CACHE_AT_NOTAFTER   , NULL},
+                  {SYSDB_IPA_SUDORULE_NOTBEFORE,          SYSDB_SUDO_CACHE_AT_NOTBEFORE  , NULL},
+-- 
+2.19.1
+

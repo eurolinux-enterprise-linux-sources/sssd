@@ -97,6 +97,7 @@ struct dp_option ipa_def_ldap_opts[] = {
     { "ldap_autofs_search_base", DP_OPT_STRING, NULL_STRING, NULL_STRING },
     { "ldap_autofs_map_master_name", DP_OPT_STRING, { "auto.master" }, NULL_STRING },
     { "ldap_schema", DP_OPT_STRING, { "ipa_v1" }, NULL_STRING },
+    { "ldap_pwmodify_mode", DP_OPT_STRING, { "exop" }, NULL_STRING },
     { "ldap_offline_timeout", DP_OPT_NUMBER, { .number = 60 }, NULL_NUMBER },
     { "ldap_force_upper_case_realm", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
     { "ldap_enumeration_refresh_timeout", DP_OPT_NUMBER, { .number = 300 }, NULL_NUMBER },
@@ -388,4 +389,10 @@ struct sdap_attr_map ipa_sudocmd_map[] = {
     { "ipa_sudocmd_sudoCmd", "sudoCmd", SYSDB_IPA_SUDOCMD_SUDOCMD, NULL },
     { "ipa_sudocmd_memberof", "memberOf", SYSDB_MEMBEROF, NULL },
     SDAP_ATTR_MAP_TERMINATOR
+};
+
+struct dp_option ipa_cli_ad_subdom_opts [] = {
+    { "ad_server", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+    { "ad_site", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+    DP_OPTION_TERMINATOR
 };

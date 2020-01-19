@@ -1,0 +1,59 @@
+From fedfc4fa5978dc0ef2c3b6efcd1e9462a8575b3a Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Thu, 7 Mar 2019 22:13:32 +0100
+Subject: [PATCH] SYSDB: Inherit cached_auth_timeout from the main domain
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+cached_auth_timeout is a domain option used by the responder. And
+because at the moment the options read from a subdomain section (e.g.
+[domain/main/trusted] are only those represented by the back end specific
+dp_option structure instance, the option cached_auth_timeout, which
+is directly read from the confdb was not set for the main domain.
+
+This is a minimal patch that just inherits the option from the main
+domain until SSSD has a more systematic way of inheriting config
+attributes regardless of how they are read and set.
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3960
+
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit 4dd268333ca9ca13555f5dfbd2928154b885a3e7)
+---
+ src/db/sysdb_subdomains.c | 1 +
+ src/man/sssd.conf.5.xml   | 5 +++++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/src/db/sysdb_subdomains.c b/src/db/sysdb_subdomains.c
+index e380e6c8b..34d052fdd 100644
+--- a/src/db/sysdb_subdomains.c
++++ b/src/db/sysdb_subdomains.c
+@@ -154,6 +154,7 @@ struct sss_domain_info *new_subdomain(TALLOC_CTX *mem_ctx,
+     dom->cache_credentials = parent->cache_credentials;
+     dom->cache_credentials_min_ff_length =
+                                         parent->cache_credentials_min_ff_length;
++    dom->cached_auth_timeout = parent->cached_auth_timeout;
+     dom->case_sensitive = false;
+     dom->user_timeout = parent->user_timeout;
+     dom->group_timeout = parent->group_timeout;
+diff --git a/src/man/sssd.conf.5.xml b/src/man/sssd.conf.5.xml
+index ef5a4b952..41ba7b924 100644
+--- a/src/man/sssd.conf.5.xml
++++ b/src/man/sssd.conf.5.xml
+@@ -2962,6 +2962,11 @@ subdomain_inherit = ldap_purge_cache_timeout
+                             authenticated using cached credentials while
+                             SSSD is in the online mode.
+                         </para>
++                        <para>
++                            This option's value is inherited by all trusted
++                            domains. At the moment it is not possible to set
++                            a different value per trusted domain.
++                        </para>
+                         <para>
+                             Special value 0 implies that this feature is
+                             disabled.
+-- 
+2.19.1
+

@@ -1,0 +1,126 @@
+From 861a45d9a866e5a9d87eaad8b8b9734eb6bc59aa Mon Sep 17 00:00:00 2001
+From: Alexey Tikhonov <atikhono@redhat.com>
+Date: Fri, 22 Mar 2019 16:33:14 +0100
+Subject: [PATCH 14/15] TESTS: moved cwrap/test_negcache to cmocka tests
+
+Moved cwrap/test_negcache.c to cmocka tests since it doesn't use
+cwrap tools anymore.
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 137b684d0a01afa02618b07ba46a44dad017b5b9)
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+---
+ Makefile.am                                   | 19 +++++++++
+ .../test_negcache_2.c}                        |  0
+ src/tests/cwrap/Makefile.am                   | 40 -------------------
+ 3 files changed, 19 insertions(+), 40 deletions(-)
+ rename src/tests/{cwrap/test_negcache.c => cmocka/test_negcache_2.c} (100%)
+
+diff --git a/Makefile.am b/Makefile.am
+index 6a67dc7b1..d09f50aa2 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -239,6 +239,7 @@ if HAVE_CMOCKA
+         test-find-uid \
+         test-io \
+         test-negcache \
++        negcache_2-tests \
+         test-authtok \
+         sss_nss_idmap-tests \
+         deskprofile_utils-tests \
+@@ -2603,6 +2604,24 @@ test_negcache_LDADD = \
+     libsss_test_common.la \
+     libsss_idmap.la
+ 
++negcache_2_tests_SOURCES =\
++    $(SSSD_RESPONDER_OBJ) \
++    src/tests/cmocka/test_negcache_2.c \
++    $(NULL)
++negcache_2_tests_CFLAGS = \
++    $(AM_CFLAGS) \
++    -DBASE_FILE_STEM=\"$(*F)\" \
++    $(NULL)
++negcache_2_tests_LDADD = \
++    $(LIBADD_DL) \
++    $(CMOCKA_LIBS) \
++    $(SSSD_LIBS) \
++    $(SYSTEMD_DAEMON_LIBS) \
++    libsss_util.la \
++    libsss_test_common.la \
++    libsss_debug.la \
++    $(NULL)
++
+ test_authtok_SOURCES = \
+     src/tests/cmocka/test_authtok.c \
+     src/util/authtok.c \
+diff --git a/src/tests/cwrap/test_negcache.c b/src/tests/cmocka/test_negcache_2.c
+similarity index 100%
+rename from src/tests/cwrap/test_negcache.c
+rename to src/tests/cmocka/test_negcache_2.c
+diff --git a/src/tests/cwrap/Makefile.am b/src/tests/cwrap/Makefile.am
+index bfc493395..1edefc678 100644
+--- a/src/tests/cwrap/Makefile.am
++++ b/src/tests/cwrap/Makefile.am
+@@ -73,26 +73,6 @@ SSSD_RESPONDER_IFACE_OBJ = \
+     ../../../src/responder/common/iface/responder_iface_generated.c \
+     $(NULL)
+ 
+-SSSD_RESPONDER_OBJ = \
+-    ../../../src/responder/common/negcache_files.c \
+-    ../../../src/util/nss_dl_load.c \
+-    ../../../src/responder/common/negcache.c \
+-    ../../../src/responder/common/responder_cmd.c \
+-    ../../../src/responder/common/responder_common.c \
+-    ../../../src/responder/common/responder_dp.c \
+-    ../../../src/responder/common/responder_dp_ssh.c \
+-    ../../../src/responder/common/responder_packet.c \
+-    ../../../src/responder/common/responder_get_domains.c \
+-    ../../../src/responder/common/responder_utils.c \
+-    ../../../src/responder/common/data_provider/rdp_message.c \
+-    ../../../src/responder/common/data_provider/rdp_client.c \
+-    ../../../src/monitor/monitor_iface_generated.c \
+-    ../../../src/providers/data_provider_req.c \
+-    ../../../src/util/session_recording.c \
+-    $(SSSD_RESPONDER_IFACE_OBJ) \
+-    $(SSSD_CACHE_REQ_OBJ) \
+-    $(NULL)
+-
+ dist_noinst_DATA = \
+     group \
+     passwd \
+@@ -107,7 +87,6 @@ check_PROGRAMS += \
+     server-tests \
+     usertools-tests \
+     responder_common-tests \
+-    negcache-tests \
+     $(NULL)
+ endif # HAVE_UID_WRAPPER
+ endif # HAVE_NSS_WRAPPER
+@@ -201,23 +180,4 @@ responder_common_tests_LDADD = \
+     $(abs_top_builddir)/libsss_test_common.la \
+     $(NULL)
+ 
+-negcache_tests_SOURCES =\
+-    $(SSSD_RESPONDER_OBJ) \
+-    test_negcache.c \
+-    $(NULL)
+-negcache_tests_CFLAGS = \
+-    $(AM_CFLAGS) \
+-    -DBASE_FILE_STEM=\"$(*F)\" \
+-    $(NULL)
+-negcache_tests_LDADD = \
+-    $(LIBADD_DL) \
+-    $(CMOCKA_LIBS) \
+-    $(SSSD_LIBS) \
+-    $(SELINUX_LIBS) \
+-    $(SYSTEMD_DAEMON_LIBS) \
+-    $(abs_top_builddir)/libsss_util.la \
+-    $(abs_top_builddir)/libsss_debug.la \
+-    $(abs_top_builddir)/libsss_test_common.la \
+-    $(NULL)
+-
+ tests: $(check_PROGRAMS)
+-- 
+2.19.1
+

@@ -1,0 +1,89 @@
+From 921a949f6aa8170f851483e4d5763b3e8fb5d5c9 Mon Sep 17 00:00:00 2001
+From: Alexey Tikhonov <atikhono@redhat.com>
+Date: Fri, 22 Mar 2019 14:21:00 +0100
+Subject: [PATCH 13/15] negcache_files: got rid of large array on stack
+
+Removed large buffer from function stack.
+It is safe to use single (static) global buffer since:
+1) Responders are single threaded
+2) Code doesn't use content of this buffer anyway
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 8e6656c974ac05bb52607014bb4c30b87f4abd8b)
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+---
+ src/responder/common/negcache_files.c | 13 +++++--------
+ 1 file changed, 5 insertions(+), 8 deletions(-)
+
+diff --git a/src/responder/common/negcache_files.c b/src/responder/common/negcache_files.c
+index 85a7065a4..f22796a0c 100644
+--- a/src/responder/common/negcache_files.c
++++ b/src/responder/common/negcache_files.c
+@@ -24,12 +24,12 @@
+ #include "responder/common/negcache_files.h"
+ 
+ #define BUFFER_SIZE 16384
++static char s_nss_buffer[BUFFER_SIZE];
+ 
+ bool is_user_local_by_name(const struct sss_nss_ops *ops, const char *name)
+ {
+     struct passwd pwd = { 0 };
+     int errnop;
+-    char buffer[BUFFER_SIZE];
+     enum nss_status ret;
+     char *shortname = NULL;
+     int parse_ret;
+@@ -39,7 +39,7 @@ bool is_user_local_by_name(const struct sss_nss_ops *ops, const char *name)
+         return false;
+     }
+ 
+-    ret = ops->getpwnam_r(shortname, &pwd, buffer, BUFFER_SIZE, &errnop);
++    ret = ops->getpwnam_r(shortname, &pwd, s_nss_buffer, BUFFER_SIZE, &errnop);
+     talloc_free(shortname);
+     if (ret == NSS_STATUS_SUCCESS) {
+         DEBUG(SSSDBG_TRACE_FUNC, "User %s is a local user\n", name);
+@@ -53,10 +53,9 @@ bool is_user_local_by_uid(const struct sss_nss_ops *ops, uid_t uid)
+ {
+     struct passwd pwd = { 0 };
+     int errnop;
+-    char buffer[BUFFER_SIZE];
+     enum nss_status ret;
+ 
+-    ret = ops->getpwuid_r(uid, &pwd, buffer, BUFFER_SIZE, &errnop);
++    ret = ops->getpwuid_r(uid, &pwd, s_nss_buffer, BUFFER_SIZE, &errnop);
+     if (ret == NSS_STATUS_SUCCESS) {
+         DEBUG(SSSDBG_TRACE_FUNC,
+               "User with UID %"SPRIuid" is a local user\n", uid);
+@@ -70,7 +69,6 @@ bool is_group_local_by_name(const struct sss_nss_ops *ops, const char *name)
+ {
+     struct group grp = { 0 };
+     int errnop;
+-    char buffer[BUFFER_SIZE];
+     enum nss_status ret;
+     char *shortname = NULL;
+     int parse_ret;
+@@ -80,7 +78,7 @@ bool is_group_local_by_name(const struct sss_nss_ops *ops, const char *name)
+         return false;
+     }
+ 
+-    ret = ops->getgrnam_r(shortname, &grp, buffer, BUFFER_SIZE, &errnop);
++    ret = ops->getgrnam_r(shortname, &grp, s_nss_buffer, BUFFER_SIZE, &errnop);
+     talloc_free(shortname);
+     if (ret == NSS_STATUS_SUCCESS) {
+         DEBUG(SSSDBG_TRACE_FUNC, "Group %s is a local group\n", name);
+@@ -94,10 +92,9 @@ bool is_group_local_by_gid(const struct sss_nss_ops *ops, uid_t gid)
+ {
+     struct group grp = { 0 };
+     int errnop;
+-    char buffer[BUFFER_SIZE];
+     enum nss_status ret;
+ 
+-    ret = ops->getgrgid_r(gid, &grp, buffer, BUFFER_SIZE, &errnop);
++    ret = ops->getgrgid_r(gid, &grp, s_nss_buffer, BUFFER_SIZE, &errnop);
+     if (ret == NSS_STATUS_SUCCESS) {
+         DEBUG(SSSDBG_TRACE_FUNC,
+               "Group with GID %"SPRIgid" is a local group\n", gid);
+-- 
+2.19.1
+

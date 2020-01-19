@@ -1,0 +1,272 @@
+From f5d031ba41b1c297f95df61f013f1c7ef8bca275 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Sun, 12 May 2019 16:38:43 +0200
+Subject: [PATCH 30/31] SDAP: allow GSS-SPNEGO for LDAP SASL bind as well
+
+From the LDAP client perspective GSS-SPNEGO and GSSAPI are quite
+similar. To support GSS-SPNEGO SSSD must make sure that a Kerberos
+ticket is available before the LDAP SASL bind is started.
+
+Related to https://pagure.io/SSSD/sssd/issue/4006
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 3b89934e831fa4e575e398fee6e4c3d4d24854eb)
+---
+ src/man/sssd-ldap.5.xml                    | 29 ++++++++++++----------
+ src/providers/ad/ad_common.c               |  6 ++---
+ src/providers/ad/ad_init.c                 |  2 +-
+ src/providers/ldap/ldap_auth.c             | 10 ++++----
+ src/providers/ldap/ldap_common.h           |  2 +-
+ src/providers/ldap/ldap_init.c             |  2 +-
+ src/providers/ldap/sdap.c                  |  9 +++++++
+ src/providers/ldap/sdap.h                  |  2 ++
+ src/providers/ldap/sdap_async_connection.c |  8 +++---
+ 9 files changed, 42 insertions(+), 28 deletions(-)
+
+diff --git a/src/man/sssd-ldap.5.xml b/src/man/sssd-ldap.5.xml
+index 25acc19e6..17c5523c0 100644
+--- a/src/man/sssd-ldap.5.xml
++++ b/src/man/sssd-ldap.5.xml
+@@ -1805,8 +1805,8 @@
+                     <term>ldap_sasl_mech (string)</term>
+                     <listitem>
+                         <para>
+-                            Specify the SASL mechanism to use.
+-                            Currently only GSSAPI is tested and supported.
++                            Specify the SASL mechanism to use.  Currently only
++                            GSSAPI and GSS-SPNEGO are tested and supported.
+                         </para>
+                         <para>
+                             Default: not set
+@@ -1818,13 +1818,14 @@
+                     <term>ldap_sasl_authid (string)</term>
+                     <listitem>
+                         <para>
+-                            Specify the SASL authorization id to use.
+-                            When GSSAPI is used, this represents the Kerberos
+-                            principal used for authentication to the directory.
+-                            This option can either contain the full principal (for
+-                            example host/myhost@EXAMPLE.COM) or just the principal name
+-                            (for example host/myhost). By default, the value is not set
+-                            and the following principals are used:
++                            Specify the SASL authorization id to use.  When
++                            GSSAPI/GSS-SPNEGO are used, this represents the
++                            Kerberos principal used for authentication to the
++                            directory.  This option can either contain the full
++                            principal (for example host/myhost@EXAMPLE.COM) or
++                            just the principal name (for example host/myhost).
++                            By default, the value is not set and the following
++                            principals are used:
+                             <programlisting>
+ hostname@REALM
+ netbiosname$@REALM
+@@ -1875,7 +1876,8 @@ host/*
+                     <term>ldap_krb5_keytab (string)</term>
+                     <listitem>
+                         <para>
+-                            Specify the keytab to use when using SASL/GSSAPI.
++                            Specify the keytab to use when using
++                            SASL/GSSAPI/GSS-SPNEGO.
+                         </para>
+                         <para>
+                             Default: System keytab, normally <filename>/etc/krb5.keytab</filename>
+@@ -1890,7 +1892,7 @@ host/*
+                             Specifies that the id_provider should init
+                             Kerberos credentials (TGT).
+                             This action is performed only if SASL is used and
+-                            the mechanism selected is GSSAPI.
++                            the mechanism selected is GSSAPI or GSS-SPNEGO.
+                         </para>
+                         <para>
+                             Default: true
+@@ -1903,7 +1905,7 @@ host/*
+                     <listitem>
+                         <para>
+                             Specifies the lifetime in seconds of the TGT if
+-                            GSSAPI is used.
++                            GSSAPI or GSS-SPNEGO is used.
+                         </para>
+                         <para>
+                             Default: 86400 (24 hours)
+@@ -1944,7 +1946,8 @@ host/*
+                     <term>krb5_realm (string)</term>
+                     <listitem>
+                         <para>
+-                            Specify the Kerberos REALM (for SASL/GSSAPI auth).
++                            Specify the Kerberos REALM (for
++                            SASL/GSSAPI/GSS-SPNEGO auth).
+                         </para>
+                         <para>
+                             Default: System defaults, see <filename>/etc/krb5.conf</filename>
+diff --git a/src/providers/ad/ad_common.c b/src/providers/ad/ad_common.c
+index 4d1800806..19d4b3d5a 100644
+--- a/src/providers/ad/ad_common.c
++++ b/src/providers/ad/ad_common.c
+@@ -577,7 +577,7 @@ _ad_servers_init(struct ad_service *service,
+         if (resolv_is_address(list[j])) {
+             DEBUG(SSSDBG_IMPORTANT_INFO,
+                   "ad_server [%s] is detected as IP address, "
+-                  "this can cause GSSAPI problems\n", list[j]);
++                  "this can cause GSSAPI/GSS-SPNEGO problems\n", list[j]);
+         }
+     }
+ 
+@@ -1012,7 +1012,7 @@ ad_set_sdap_options(struct ad_options *ad_opts,
+         goto done;
+     }
+ 
+-    /* Set the Kerberos Realm for GSSAPI */
++    /* Set the Kerberos Realm for GSSAPI or GSS-SPNEGO */
+     krb5_realm = dp_opt_get_string(ad_opts->basic, AD_KRB5_REALM);
+     if (!krb5_realm) {
+         /* Should be impossible, this is set in ad_get_common_options() */
+@@ -1269,7 +1269,7 @@ ad_get_auth_options(TALLOC_CTX *mem_ctx,
+            ad_servers);
+ 
+     /* Set krb5 realm */
+-    /* Set the Kerberos Realm for GSSAPI */
++    /* Set the Kerberos Realm for GSSAPI/GSS-SPNEGO */
+     krb5_realm = dp_opt_get_string(ad_opts->basic, AD_KRB5_REALM);
+     if (!krb5_realm) {
+         /* Should be impossible, this is set in ad_get_common_options() */
+diff --git a/src/providers/ad/ad_init.c b/src/providers/ad/ad_init.c
+index 612d4587e..302bcae7d 100644
+--- a/src/providers/ad/ad_init.c
++++ b/src/providers/ad/ad_init.c
+@@ -56,7 +56,7 @@ static int ad_sasl_getopt(void *context, const char *plugin_name,
+     if (!plugin_name || !result) {
+         return SASL_FAIL;
+     }
+-    if (strcmp(plugin_name, "GSSAPI") != 0) {
++    if (!sdap_sasl_mech_needs_kinit(plugin_name)) {
+         return SASL_FAIL;
+     }
+     if (strcmp(option, "ad_compat") != 0) {
+diff --git a/src/providers/ldap/ldap_auth.c b/src/providers/ldap/ldap_auth.c
+index de22689ae..86724e388 100644
+--- a/src/providers/ldap/ldap_auth.c
++++ b/src/providers/ldap/ldap_auth.c
+@@ -715,9 +715,9 @@ static struct tevent_req *auth_connect_send(struct tevent_req *req)
+          * we don't need to authenticate the connection, because we're not
+          * looking up any information using the connection. This might be
+          * needed e.g. in case both ID and AUTH providers are set to LDAP
+-         * and the server is AD, because otherwise the connection would
+-         * both do a startTLS and later bind using GSSAPI which doesn't work
+-         * well with AD.
++         * and the server is AD, because otherwise the connection would both
++         * do a startTLS and later bind using GSSAPI or GSS-SPNEGO which
++         * doesn't work well with AD.
+          */
+         skip_conn_auth = true;
+     }
+@@ -725,8 +725,8 @@ static struct tevent_req *auth_connect_send(struct tevent_req *req)
+     if (skip_conn_auth == false) {
+         sasl_mech = dp_opt_get_string(state->ctx->opts->basic,
+                                       SDAP_SASL_MECH);
+-        if (sasl_mech && strcasecmp(sasl_mech, "GSSAPI") == 0) {
+-            /* Don't force TLS on if we're told to use GSSAPI */
++        if (sasl_mech && sdap_sasl_mech_needs_kinit(sasl_mech)) {
++            /* Don't force TLS on if we're told to use GSSAPI or GSS-SPNEGO */
+             use_tls = false;
+         }
+     }
+diff --git a/src/providers/ldap/ldap_common.h b/src/providers/ldap/ldap_common.h
+index 6647241b4..04548a388 100644
+--- a/src/providers/ldap/ldap_common.h
++++ b/src/providers/ldap/ldap_common.h
+@@ -65,7 +65,7 @@ struct sdap_id_ctx {
+     struct be_ctx *be;
+     struct sdap_options *opts;
+ 
+-    /* If using GSSAPI */
++    /* If using GSSAPI or GSS-SPNEGO */
+     struct krb5_service *krb5_service;
+     /* connection to a server */
+     struct sdap_id_conn_ctx *conn;
+diff --git a/src/providers/ldap/ldap_init.c b/src/providers/ldap/ldap_init.c
+index 44b3e9ab3..352f0b656 100644
+--- a/src/providers/ldap/ldap_init.c
++++ b/src/providers/ldap/ldap_init.c
+@@ -365,7 +365,7 @@ static bool should_call_gssapi_init(struct sdap_options *opts)
+         return false;
+     }
+ 
+-    if (strcasecmp(sasl_mech, "GSSAPI") != 0) {
++    if (!sdap_sasl_mech_needs_kinit(sasl_mech)) {
+         return false;
+     }
+ 
+diff --git a/src/providers/ldap/sdap.c b/src/providers/ldap/sdap.c
+index 5c9d0a45d..5591a6718 100644
+--- a/src/providers/ldap/sdap.c
++++ b/src/providers/ldap/sdap.c
+@@ -904,6 +904,15 @@ errno_t setup_tls_config(struct dp_option *basic_opts)
+     return EOK;
+ }
+ 
++bool sdap_sasl_mech_needs_kinit(const char *sasl_mech)
++{
++    if (strcasecmp(sasl_mech, "GSSAPI") == 0
++            || strcasecmp(sasl_mech, "GSS-SPNEGO") == 0) {
++        return true;
++    }
++
++    return false;
++}
+ 
+ bool sdap_check_sup_list(struct sup_list *l, const char *val)
+ {
+diff --git a/src/providers/ldap/sdap.h b/src/providers/ldap/sdap.h
+index 48061d389..dddcf5faf 100644
+--- a/src/providers/ldap/sdap.h
++++ b/src/providers/ldap/sdap.h
+@@ -619,6 +619,8 @@ bool sdap_check_sup_list(struct sup_list *l, const char *val);
+ #define sdap_is_extension_supported(sh, ext_oid) \
+     sdap_check_sup_list(&((sh)->supported_extensions), ext_oid)
+ 
++bool sdap_sasl_mech_needs_kinit(const char *mech);
++
+ int build_attrs_from_map(TALLOC_CTX *memctx,
+                          struct sdap_attr_map *map,
+                          size_t size,
+diff --git a/src/providers/ldap/sdap_async_connection.c b/src/providers/ldap/sdap_async_connection.c
+index 8aacd6705..6bc271a91 100644
+--- a/src/providers/ldap/sdap_async_connection.c
++++ b/src/providers/ldap/sdap_async_connection.c
+@@ -1605,14 +1605,14 @@ static void sdap_cli_connect_done(struct tevent_req *subreq)
+     sasl_mech = dp_opt_get_string(state->opts->basic, SDAP_SASL_MECH);
+ 
+     if (state->do_auth && sasl_mech && state->use_rootdse) {
+-        /* check if server claims to support GSSAPI */
++        /* check if server claims to support the configured SASL MECH */
+         if (!sdap_is_sasl_mech_supported(state->sh, sasl_mech)) {
+             tevent_req_error(req, ENOTSUP);
+             return;
+         }
+     }
+ 
+-    if (state->do_auth && sasl_mech && (strcasecmp(sasl_mech, "GSSAPI") == 0)) {
++    if (state->do_auth && sasl_mech && sdap_sasl_mech_needs_kinit(sasl_mech)) {
+         if (dp_opt_get_bool(state->opts->basic, SDAP_KRB5_KINIT)) {
+             sdap_cli_kinit_step(req);
+             return;
+@@ -1690,14 +1690,14 @@ static void sdap_cli_rootdse_done(struct tevent_req *subreq)
+     sasl_mech = dp_opt_get_string(state->opts->basic, SDAP_SASL_MECH);
+ 
+     if (state->do_auth && sasl_mech && state->rootdse) {
+-        /* check if server claims to support GSSAPI */
++        /* check if server claims to support the configured SASL MECH */
+         if (!sdap_is_sasl_mech_supported(state->sh, sasl_mech)) {
+             tevent_req_error(req, ENOTSUP);
+             return;
+         }
+     }
+ 
+-    if (state->do_auth && sasl_mech && (strcasecmp(sasl_mech, "GSSAPI") == 0)) {
++    if (state->do_auth && sasl_mech && sdap_sasl_mech_needs_kinit(sasl_mech)) {
+         if (dp_opt_get_bool(state->opts->basic, SDAP_KRB5_KINIT)) {
+             sdap_cli_kinit_step(req);
+             return;
+-- 
+2.20.1
+

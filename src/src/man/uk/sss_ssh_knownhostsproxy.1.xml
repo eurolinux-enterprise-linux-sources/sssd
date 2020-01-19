@@ -79,6 +79,16 @@ GlobalKnownHostsFile /var/lib/sss/pubconf/known_hosts
                     </para>
                 </listitem>
             </varlistentry>
+            <varlistentry>
+                <term>
+                    <option>-k</option>,<option>--pubkey</option>
+                </term>
+                <listitem>
+                    <para>
+                        Вивести відкриті ключі SSH для вузла <replaceable>HOST</replaceable>.
+                    </para>
+                </listitem>
+            </varlistentry>
             <xi:include xmlns:xi="http://www.w3.org/2001/XInclude" href="include/param_help.xml" />
         </variablelist>
     </refsect1>

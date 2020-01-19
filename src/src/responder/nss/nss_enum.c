@@ -93,7 +93,8 @@ nss_setent_internal_send(TALLOC_CTX *mem_ctx,
     /* Create new object. */
     state->enum_ctx->is_ready = false;
     subreq = cache_req_send(req, ev, cli_ctx->rctx, cli_ctx->rctx->ncache,
-                            0, CACHE_REQ_POSIX_DOM, NULL, data);
+                            state->nss_ctx->cache_refresh_percent,
+                            CACHE_REQ_POSIX_DOM, NULL, data);
     if (subreq == NULL) {
         DEBUG(SSSDBG_CRIT_FAILURE, "Unable to send cache request!\n");
         ret = ENOMEM;
@@ -138,7 +139,7 @@ static void nss_setent_internal_done(struct tevent_req *subreq)
     switch (ret) {
     case EOK:
         talloc_zfree(state->enum_ctx->result);
-        state->enum_ctx->result = talloc_steal(state->nss_ctx, result);
+        state->enum_ctx->result = talloc_steal(state->enum_ctx, result);
 
         if (state->type == CACHE_REQ_NETGROUP_BY_NAME) {
             /* We need to expand the netgroup into triples and members. */

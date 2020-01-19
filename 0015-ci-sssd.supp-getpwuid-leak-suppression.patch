@@ -1,0 +1,50 @@
+From 2dbfa995e592329470f57f456a054f845a9a3da3 Mon Sep 17 00:00:00 2001
+From: Alexey Tikhonov <atikhono@redhat.com>
+Date: Mon, 1 Apr 2019 16:44:26 +0200
+Subject: [PATCH 15/15] ci/sssd.supp: getpwuid() leak suppression
+
+Supresses following error:
+ 4,096 bytes in 1 blocks are definitely lost in loss record 67 of 83
+    at 0x4C2CDCB: malloc (vg_replace_malloc.c:299)
+    by 0xB8F8627: ???
+    by 0xB91EF3F: ???
+    by 0xB90E112: ???
+    by 0x9992974: getpwuid_r@@GLIBC_2.2.5 (in /usr/lib64/libc-2.26.so)
+    by 0x99920D7: getpwuid (in /usr/lib64/libc-2.26.so)
+
+This https://sourceware.org/bugzilla/show_bug.cgi?id=2314#c8 might
+be related.
+
+This problem seems to be afecting Fedora < F28
+
+(cherry picked from commit 9eb8b784d4365b846f1a620f11632099d10de2c8)
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+---
+ contrib/ci/sssd.supp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/contrib/ci/sssd.supp b/contrib/ci/sssd.supp
+index 4303eed22..0bef4fa90 100644
+--- a/contrib/ci/sssd.supp
++++ b/contrib/ci/sssd.supp
+@@ -221,3 +221,16 @@
+    fun:set_default_locale
+    fun:main
+ }
++
++# glibc nsswitch (getpwuid) leak
++# Seems to be affecting Fedora < F28
++{
++   glibc-nss-getpwuid
++   Memcheck:Leak
++   fun:malloc
++   ...
++   fun:getpwuid_r@@GLIBC_2.2.5
++   fun:getpwuid
++   ...
++   fun:main
++}
+-- 
+2.19.1
+

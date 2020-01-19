@@ -3,14 +3,15 @@
 #
 # Copyright (c) 2016 Red Hat, Inc.
 #
-# This is free software; you can redistribute it and/or modify it
-# under the terms of the GNU General Public License as published by
-# the Free Software Foundation; version 2 only
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3 of the License, or
+# (at your option) any later version.
 #
-# This program is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-# General Public License for more details.
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
@@ -310,8 +311,28 @@ def domain_resolution_order(request):
     return None
 
 
-def setup_pw_with_list(request, user_list):
-    pwd_ops = passwd_ops_setup(request)
+@pytest.fixture
+def override_homedir_and_shell(request):
+    conf = unindent("""\
+        [sssd]
+        domains             = files
+        services            = nss
+
+        [domain/files]
+        id_provider = files
+        override_homedir = /test/bar
+        override_shell = /bin/bar
+
+        [nss]
+        override_homedir = /test/foo
+        override_shell = /bin/foo
+    """).format(**locals())
+    create_conf_fixture(request, conf)
+    create_sssd_fixture(request)
+    return None
+
+
+def setup_pw_with_list(pwd_ops, user_list):
     for user in user_list:
         pwd_ops.useradd(**user)
     ent.assert_passwd_by_name(CANARY['name'], CANARY)
@@ -319,17 +340,16 @@ def setup_pw_with_list(request, user_list):
 
 
 @pytest.fixture
-def add_user_with_canary(request):
-    return setup_pw_with_list(request, [CANARY, USER1])
+def add_user_with_canary(passwd_ops_setup):
+    return setup_pw_with_list(passwd_ops_setup, [CANARY, USER1])
 
 
 @pytest.fixture
-def setup_pw_with_canary(request):
-    return setup_pw_with_list(request, [CANARY])
+def setup_pw_with_canary(passwd_ops_setup):
+    return setup_pw_with_list(passwd_ops_setup, [CANARY])
 
 
-def setup_gr_with_list(request, group_list):
-    grp_ops = group_ops_setup(request)
+def setup_gr_with_list(grp_ops, group_list):
     for group in group_list:
         grp_ops.groupadd(**group)
     ent.assert_group_by_name(CANARY_GR['name'], CANARY_GR)
@@ -337,13 +357,13 @@ def setup_gr_with_list(request, group_list):
 
 
 @pytest.fixture
-def add_group_with_canary(request):
-    return setup_gr_with_list(request, [GROUP1, CANARY_GR])
+def add_group_with_canary(group_ops_setup):
+    return setup_gr_with_list(group_ops_setup, [GROUP1, CANARY_GR])
 
 
 @pytest.fixture
-def setup_gr_with_canary(request):
-    return setup_gr_with_list(request, [CANARY_GR])
+def setup_gr_with_canary(group_ops_setup):
+    return setup_gr_with_list(group_ops_setup, [CANARY_GR])
 
 
 def poll_canary(fn, name, threshold=20):
@@ -622,6 +642,10 @@ def test_enum_users(setup_pw_with_canary, files_domain_only):
         user = user_generator(i)
         setup_pw_with_canary.useradd(**user)
 
+    # syncing with the help of the canary is not reliable after adding
+    # multiple users because the canary might still be in some caches so that
+    # the data is not refreshed properly.
+    subprocess.call(["sss_cache", "-E"])
     sssd_getpwnam_sync(CANARY["name"])
     user_list = call_sssd_enumeration()
     # +1 because the canary is added
@@ -652,7 +676,7 @@ def test_user_no_dir(setup_pw_with_canary, files_domain_only):
     Test that resolving a user without a homedir defined works and returns
     a fallback value
     """
-    check_user(incomplete_user_setup(setup_pw_with_canary, 'dir', '/'))
+    check_user(incomplete_user_setup(setup_pw_with_canary, 'dir', ''))
 
 
 def test_user_no_gecos(setup_pw_with_canary, files_domain_only):
@@ -798,8 +822,8 @@ def test_mod_group_gid(add_group_with_canary, files_domain_only):
 
 
 @pytest.fixture
-def add_group_nomem_with_canary(request):
-    return setup_gr_with_list(request, [GROUP_NOMEM, CANARY_GR])
+def add_group_nomem_with_canary(group_ops_setup):
+    return setup_gr_with_list(group_ops_setup, [GROUP_NOMEM, CANARY_GR])
 
 
 def test_getgrnam_no_members(add_group_nomem_with_canary, files_domain_only):
@@ -1021,6 +1045,10 @@ def test_getgrnam_add_remove_ghosts(setup_pw_with_canary,
 
     # Add this user and verify it's been added as a member
     pwd_ops.useradd(**USER2)
+    # The negative cache might still have user2 from the previous request,
+    # flushing the caches might help to prevent a failed lookup after adding
+    # the user.
+    subprocess.call(["sss_cache", "-E"])
     res, groups = sssd_id_sync('user2')
     assert res == sssd_id.NssReturnCode.SUCCESS
     assert len(groups) == 2
@@ -1198,3 +1226,17 @@ def test_files_with_domain_resolution_order(add_user_with_canary,
     its fully-qualified name.
     """
     check_user(USER1)
+
+
+def test_files_with_override_homedir(add_user_with_canary,
+                                     override_homedir_and_shell):
+    res, user = sssd_getpwnam_sync(USER1["name"])
+    assert res == NssReturnCode.SUCCESS
+    assert user["dir"] == USER1["dir"]
+
+
+def test_files_with_override_shell(add_user_with_canary,
+                                   override_homedir_and_shell):
+    res, user = sssd_getpwnam_sync(USER1["name"])
+    assert res == NssReturnCode.SUCCESS
+    assert user["shell"] == USER1["shell"]
