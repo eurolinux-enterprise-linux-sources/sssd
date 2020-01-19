@@ -1,0 +1,358 @@
+From 118c44f90c9c901ffbf1b676be57b7a83a190399 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Fri, 30 Nov 2018 13:06:13 +0100
+Subject: [PATCH] NSS: Avoid changing the memory cache ownership away from the
+ sssd user
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3890
+
+In case SSSD is compiled --with-sssd-user but run as root (which is the
+default on RHEL and derivatives), then the memory cache will be owned by
+the user that sssd_nss runs as, so root.
+
+This conflicts with the packaging which specifies sssd.sssd as the owner. And
+in turn, this means that users can't reliably assess the package integrity
+using rpm -V.
+
+This patch makes sure that the memory cache files are chowned to sssd.sssd
+even if the nss responder runs as root.
+
+Also, this patch changes the sssd_nss responder so that is becomes a member
+of the supplementary sssd group. Even though in traditional UNIX sense,
+a process running as root could write to a file owned by sssd:sssd, with
+SELinux enforcing mode this becomes problematic as SELinux emits an error
+such as:
+
+type=AVC msg=audit(1543524888.125:1495): avc:  denied  { fsetid } for
+pid=7706 comm="sssd_nss" capability=4  scontext=system_u:system_r:sssd_t:s0
+tcontext=system_u:system_r:sssd_t:s0 tclass=capability
+
+To make it possible for the sssd_nss process to write to the files, the
+files are also made group-writable. The 'others' permission is still set
+to read only.
+
+Reviewed-by: Michal Židek <mzidek@redhat.com>
+(cherry picked from commit 61e4ba58934b20a950255e05797aca25aadc1242)
+---
+ src/responder/nss/nss_private.h       |   2 +
+ src/responder/nss/nsssrv.c            | 106 ++++++++++++++++++++++++--
+ src/responder/nss/nsssrv_mmap_cache.c |  51 ++++++++++++-
+ src/responder/nss/nsssrv_mmap_cache.h |   5 +-
+ 5 files changed, 154 insertions(+), 10 deletions(-)
+
+diff --git a/src/responder/nss/nss_private.h b/src/responder/nss/nss_private.h
+index cd0d35517..bae5fe074 100644
+--- a/src/responder/nss/nss_private.h
++++ b/src/responder/nss/nss_private.h
+@@ -87,6 +87,8 @@ struct nss_ctx {
+     struct sss_mc_ctx *pwd_mc_ctx;
+     struct sss_mc_ctx *grp_mc_ctx;
+     struct sss_mc_ctx *initgr_mc_ctx;
++    uid_t mc_uid;
++    gid_t mc_gid;
+ };
+ 
+ struct sss_cmd_table *get_nss_cmds(void);
+diff --git a/src/responder/nss/nsssrv.c b/src/responder/nss/nsssrv.c
+index d6c5a08a9..87a3f1d50 100644
+--- a/src/responder/nss/nsssrv.c
++++ b/src/responder/nss/nsssrv.c
+@@ -101,7 +101,8 @@ static int nss_clear_memcache(struct sbus_request *dbus_req, void *data)
+ 
+     /* TODO: read cache sizes from configuration */
+     DEBUG(SSSDBG_TRACE_FUNC, "Clearing memory caches.\n");
+-    ret = sss_mmap_cache_reinit(nctx, SSS_MC_CACHE_ELEMENTS,
++    ret = sss_mmap_cache_reinit(nctx, nctx->mc_uid, nctx->mc_gid,
++                                SSS_MC_CACHE_ELEMENTS,
+                                 (time_t) memcache_timeout,
+                                 &nctx->pwd_mc_ctx);
+     if (ret != EOK) {
+@@ -110,7 +111,8 @@ static int nss_clear_memcache(struct sbus_request *dbus_req, void *data)
+         return ret;
+     }
+ 
+-    ret = sss_mmap_cache_reinit(nctx, SSS_MC_CACHE_ELEMENTS,
++    ret = sss_mmap_cache_reinit(nctx, nctx->mc_uid, nctx->mc_gid,
++                                SSS_MC_CACHE_ELEMENTS,
+                                 (time_t) memcache_timeout,
+                                 &nctx->grp_mc_ctx);
+     if (ret != EOK) {
+@@ -119,7 +121,8 @@ static int nss_clear_memcache(struct sbus_request *dbus_req, void *data)
+         return ret;
+     }
+ 
+-    ret = sss_mmap_cache_reinit(nctx, SSS_MC_CACHE_ELEMENTS,
++    ret = sss_mmap_cache_reinit(nctx, nctx->mc_uid, nctx->mc_gid,
++                                SSS_MC_CACHE_ELEMENTS,
+                                 (time_t)memcache_timeout,
+                                 &nctx->initgr_mc_ctx);
+     if (ret != EOK) {
+@@ -284,21 +287,27 @@ static int setup_memcaches(struct nss_ctx *nctx)
+     }
+ 
+     /* TODO: read cache sizes from configuration */
+-    ret = sss_mmap_cache_init(nctx, "passwd", SSS_MC_PASSWD,
++    ret = sss_mmap_cache_init(nctx, "passwd",
++                              nctx->mc_uid, nctx->mc_gid,
++                              SSS_MC_PASSWD,
+                               SSS_MC_CACHE_ELEMENTS, (time_t)memcache_timeout,
+                               &nctx->pwd_mc_ctx);
+     if (ret) {
+         DEBUG(SSSDBG_CRIT_FAILURE, "passwd mmap cache is DISABLED\n");
+     }
+ 
+-    ret = sss_mmap_cache_init(nctx, "group", SSS_MC_GROUP,
++    ret = sss_mmap_cache_init(nctx, "group",
++                              nctx->mc_uid, nctx->mc_gid,
++                              SSS_MC_GROUP,
+                               SSS_MC_CACHE_ELEMENTS, (time_t)memcache_timeout,
+                               &nctx->grp_mc_ctx);
+     if (ret) {
+         DEBUG(SSSDBG_CRIT_FAILURE, "group mmap cache is DISABLED\n");
+     }
+ 
+-    ret = sss_mmap_cache_init(nctx, "initgroups", SSS_MC_INITGROUPS,
++    ret = sss_mmap_cache_init(nctx, "initgroups",
++                              nctx->mc_uid, nctx->mc_gid,
++                              SSS_MC_INITGROUPS,
+                               SSS_MC_CACHE_ELEMENTS, (time_t)memcache_timeout,
+                               &nctx->initgr_mc_ctx);
+     if (ret) {
+@@ -308,6 +317,79 @@ static int setup_memcaches(struct nss_ctx *nctx)
+     return EOK;
+ }
+ 
++static int sssd_supplementary_group(struct nss_ctx *nss_ctx)
++{
++    errno_t ret;
++    int size;
++    gid_t *supp_gids = NULL;
++
++    /*
++     * We explicitly read the IDs of the SSSD user even though the server
++     * receives --uid and --gid by parameters to account for the case where
++     * the SSSD is compiled --with-sssd-user=sssd but the default of the
++     * user option is root (this is what RHEL does)
++     */
++    ret = sss_user_by_name_or_uid(SSSD_USER,
++                                  &nss_ctx->mc_uid,
++                                  &nss_ctx->mc_gid);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_MINOR_FAILURE, "Cannot get info on "SSSD_USER);
++        return ret;
++    }
++
++    if (getgid() == nss_ctx->mc_gid) {
++        DEBUG(SSSDBG_TRACE_FUNC, "Already running as the sssd group\n");
++        return EOK;
++    }
++
++    size = getgroups(0, NULL);
++    if (size == -1) {
++        ret = errno;
++        DEBUG(SSSDBG_CRIT_FAILURE, "Getgroups failed! (%d, %s)\n",
++                                    ret, sss_strerror(ret));
++        return ret;
++    }
++
++    if (size > 0) {
++        supp_gids = talloc_zero_array(NULL, gid_t, size);
++        if (supp_gids == NULL) {
++            DEBUG(SSSDBG_CRIT_FAILURE, "Allocation failed!\n");
++            ret = ENOMEM;
++            goto done;
++        }
++    }
++
++    size = getgroups(size, supp_gids);
++    if (size == -1) {
++        ret = errno;
++        DEBUG(SSSDBG_CRIT_FAILURE, "Getgroups failed! (%d, %s)\n",
++                                    ret, sss_strerror(ret));
++        goto done;
++    }
++
++    for (int i = 0; i < size; i++) {
++        if (supp_gids[i] == nss_ctx->mc_gid) {
++            DEBUG(SSSDBG_TRACE_FUNC,
++                  "Already assigned to the SSSD supplementary group\n");
++            ret = EOK;
++            goto done;
++        }
++    }
++
++    ret = setgroups(1, &nss_ctx->mc_gid);
++    if (ret != EOK) {
++        ret = errno;
++        DEBUG(SSSDBG_OP_FAILURE,
++              "Cannot setgroups [%d]: %s\n", ret, sss_strerror(ret));
++        goto done;
++    }
++
++    ret = EOK;
++done:
++    talloc_free(supp_gids);
++    return ret;
++}
++
+ int nss_process_init(TALLOC_CTX *mem_ctx,
+                      struct tevent_context *ev,
+                      struct confdb_ctx *cdb)
+@@ -405,6 +487,18 @@ int nss_process_init(TALLOC_CTX *mem_ctx,
+         ret = EFAULT;
+         goto fail;
+     }
++    /*
++     * Adding the NSS process to the SSSD supplementary group avoids
++     * dac_override AVC messages from SELinux in case sssd_nss runs
++     * as root and tries to write to memcache owned by sssd:sssd
++     */
++    ret = sssd_supplementary_group(nctx);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_MINOR_FAILURE,
++              "Cannot add process to the sssd supplementary group [%d]: %s\n",
++              ret, sss_strerror(ret));
++        goto fail;
++    }
+ 
+     ret = setup_memcaches(nctx);
+     if (ret != EOK) {
+diff --git a/src/responder/nss/nsssrv_mmap_cache.c b/src/responder/nss/nsssrv_mmap_cache.c
+index de9e67513..d5181d771 100644
+--- a/src/responder/nss/nsssrv_mmap_cache.c
++++ b/src/responder/nss/nsssrv_mmap_cache.c
+@@ -57,6 +57,9 @@ struct sss_mc_ctx {
+     char *file;             /* mmap cache file name */
+     int fd;                 /* file descriptor */
+ 
++    uid_t uid;              /* User ID of owner */
++    gid_t gid;              /* Group ID of owner */
++
+     uint32_t seed;          /* pseudo-random seed to avoid collision attacks */
+     time_t valid_time_slot; /* maximum time the entry is valid in seconds */
+ 
+@@ -623,7 +626,9 @@ static errno_t sss_mc_get_record(struct sss_mc_ctx **_mcc,
+         if (ret == EFAULT) {
+             DEBUG(SSSDBG_CRIT_FAILURE,
+                   "Fatal internal mmap cache error, invalidating cache!\n");
+-            (void)sss_mmap_cache_reinit(talloc_parent(mcc), -1, -1, _mcc);
++            (void)sss_mmap_cache_reinit(talloc_parent(mcc),
++                                        -1, -1, -1, -1,
++                                        _mcc);
+         }
+         return ret;
+     }
+@@ -1144,6 +1149,26 @@ static errno_t sss_mc_create_file(struct sss_mc_ctx *mc_ctx)
+         return ret;
+     }
+ 
++    /* Make sure that the memory cache files are chowned to sssd.sssd even
++     * if the nss responder runs as root. This is because the specfile
++     * has the ownership recorded as sssd.sssd
++     */
++    ret = fchown(mc_ctx->fd, mc_ctx->uid, mc_ctx->gid);
++    if (ret != 0) {
++        ret = errno;
++        DEBUG(SSSDBG_CRIT_FAILURE, "Failed to chown mmap file %s: %d(%s)\n",
++                                   mc_ctx->file, ret, strerror(ret));
++        return ret;
++    }
++
++    ret = fchmod(mc_ctx->fd, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH);
++    if (ret == -1) {
++        ret = errno;
++        DEBUG(SSSDBG_CRIT_FAILURE, "Failed to chmod mmap file %s: %d(%s)\n",
++                                   mc_ctx->file, ret, strerror(ret));
++        return ret;
++    }
++
+     ret = sss_br_lock_file(mc_ctx->fd, 0, 1, retries, t);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_FATAL_FAILURE,
+@@ -1224,6 +1249,7 @@ static int mc_ctx_destructor(struct sss_mc_ctx *mc_ctx)
+ }
+ 
+ errno_t sss_mmap_cache_init(TALLOC_CTX *mem_ctx, const char *name,
++                            uid_t uid, gid_t gid,
+                             enum sss_mc_type type, size_t n_elem,
+                             time_t timeout, struct sss_mc_ctx **mcc)
+ {
+@@ -1259,6 +1285,9 @@ errno_t sss_mmap_cache_init(TALLOC_CTX *mem_ctx, const char *name,
+         goto done;
+     }
+ 
++    mc_ctx->uid = uid;
++    mc_ctx->gid = gid;
++
+     mc_ctx->type = type;
+ 
+     mc_ctx->valid_time_slot = timeout;
+@@ -1352,7 +1381,9 @@ done:
+     return ret;
+ }
+ 
+-errno_t sss_mmap_cache_reinit(TALLOC_CTX *mem_ctx, size_t n_elem,
++errno_t sss_mmap_cache_reinit(TALLOC_CTX *mem_ctx,
++                              uid_t uid, gid_t gid,
++                              size_t n_elem,
+                               time_t timeout, struct sss_mc_ctx **mc_ctx)
+ {
+     errno_t ret;
+@@ -1389,12 +1420,26 @@ errno_t sss_mmap_cache_reinit(TALLOC_CTX *mem_ctx, size_t n_elem,
+         timeout = (*mc_ctx)->valid_time_slot;
+     }
+ 
++    if (uid == (uid_t)-1) {
++        uid = (*mc_ctx)->uid;
++    }
++
++    if (gid == (gid_t)-1) {
++        gid = (*mc_ctx)->gid;
++    }
++
+     talloc_free(*mc_ctx);
+ 
+     /* make sure we do not leave a potentially freed pointer around */
+     *mc_ctx = NULL;
+ 
+-    ret = sss_mmap_cache_init(mem_ctx, name, type, n_elem, timeout, mc_ctx);
++    ret = sss_mmap_cache_init(mem_ctx,
++                              name,
++                              uid, gid,
++                              type,
++                              n_elem,
++                              timeout,
++                              mc_ctx);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_CRIT_FAILURE, "Failed to re-initialize mmap cache.\n");
+         goto done;
+diff --git a/src/responder/nss/nsssrv_mmap_cache.h b/src/responder/nss/nsssrv_mmap_cache.h
+index b84fbc8ed..e06257949 100644
+--- a/src/responder/nss/nsssrv_mmap_cache.h
++++ b/src/responder/nss/nsssrv_mmap_cache.h
+@@ -34,6 +34,7 @@ enum sss_mc_type {
+ };
+ 
+ errno_t sss_mmap_cache_init(TALLOC_CTX *mem_ctx, const char *name,
++                            uid_t uid, gid_t gid,
+                             enum sss_mc_type type, size_t n_elem,
+                             time_t valid_time, struct sss_mc_ctx **mcc);
+ 
+@@ -70,7 +71,9 @@ errno_t sss_mmap_cache_gr_invalidate_gid(struct sss_mc_ctx *mcc, gid_t gid);
+ errno_t sss_mmap_cache_initgr_invalidate(struct sss_mc_ctx *mcc,
+                                          struct sized_string *name);
+ 
+-errno_t sss_mmap_cache_reinit(TALLOC_CTX *mem_ctx, size_t n_elem,
++errno_t sss_mmap_cache_reinit(TALLOC_CTX *mem_ctx,
++                              uid_t uid, gid_t gid,
++                              size_t n_elem,
+                               time_t timeout, struct sss_mc_ctx **mc_ctx);
+ 
+ void sss_mmap_cache_reset(struct sss_mc_ctx *mc_ctx);
+-- 
+2.19.1
+

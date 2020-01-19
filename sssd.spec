@@ -48,7 +48,7 @@
 
 Name: sssd
 Version: 1.16.2
-Release: 13%{?dist}.5
+Release: 13%{?dist}.8
 Group: Applications/System
 Summary: System Security Services Daemon
 License: GPLv3+
@@ -111,6 +111,8 @@ Patch0051: 0051-ipa-use-only-the-global-catalog-service-of-the-fores.patch
 Patch0052: 0052-LDAP-minor-refactoring-in-auth_send-to-conform-to-ou.patch
 Patch0053: 0053-LDAP-Only-authenticate-the-auth-connection-if-we-nee.patch
 Patch0054: 0054-LDAP-Log-the-encryption-used-during-LDAP-authenticat.patch
+Patch0055: 0055-krb5_locator-always-use-port-88-for-master-KDC.patch
+Patch0056: 0056-NSS-Avoid-changing-the-memory-cache-ownership-away-f.patch
 
 #This patch should not be removed in RHEL-7
 Patch999: 0999-NOUPSTREAM-Default-to-root-if-sssd-user-is-not-spec
@@ -834,12 +836,12 @@ done
 %dir %{sssdstatedir}
 %dir %{_localstatedir}/cache/krb5rcache
 %attr(700,sssd,sssd) %dir %{dbpath}
-%attr(755,sssd,sssd) %dir %{mcpath}
+%attr(775,sssd,sssd) %dir %{mcpath}
 %attr(700,root,root) %dir %{secdbpath}
 %attr(755,root,root) %dir %{deskprofilepath}
-%ghost %attr(0644,sssd,sssd) %verify(not md5 size mtime) %{mcpath}/passwd
-%ghost %attr(0644,sssd,sssd) %verify(not md5 size mtime) %{mcpath}/group
-%ghost %attr(0644,sssd,sssd) %verify(not md5 size mtime) %{mcpath}/initgroups
+%ghost %attr(0664,sssd,sssd) %verify(not md5 size mtime) %{mcpath}/passwd
+%ghost %attr(0664,sssd,sssd) %verify(not md5 size mtime) %{mcpath}/group
+%ghost %attr(0664,sssd,sssd) %verify(not md5 size mtime) %{mcpath}/initgroups
 %attr(755,sssd,sssd) %dir %{pipepath}
 %attr(750,sssd,root) %dir %{pipepath}/private
 %attr(755,sssd,sssd) %dir %{pubconfpath}
@@ -847,7 +849,7 @@ done
 %attr(750,sssd,sssd) %dir %{_var}/log/%{name}
 %attr(711,sssd,sssd) %dir %{_sysconfdir}/sssd
 %attr(711,sssd,sssd) %dir %{_sysconfdir}/sssd/conf.d
-%ghost %attr(0600,sssd,sssd) %config(noreplace) %{_sysconfdir}/sssd/sssd.conf
+%ghost %attr(0600,root,root) %config(noreplace) %{_sysconfdir}/sssd/sssd.conf
 %dir %{_sysconfdir}/logrotate.d
 %config(noreplace) %{_sysconfdir}/logrotate.d/sssd
 %dir %{_sysconfdir}/rwtab.d
@@ -1263,22 +1265,33 @@ systemctl try-restart sssd >/dev/null 2>&1 || :
 }
 
 %changelog
-* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.3-5
+* Tue Mar 26 2019 Michal Židek <mzidek@redhat.com> - 1.16.2-13.8
+- Resolves: rhbz#1690759 - RHEL STIG pointing sssd Packaging issue [rhel-7.6.z]
+                         - Part 2.
+
+* Tue Mar 26 2019 Michal Židek <mzidek@redhat.com> - 1.16.2-13.7
+- Resolves: rhbz#1690759 - RHEL STIG pointing sssd Packaging issue [rhel-7.6.z]
+
+* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.6
+- Resolves: rhbz#1683578 - sssd_krb5_locator_plugin introduces delay in
+                           cifs.upcall krb5 calls [rhel-7.6.z]
+
+* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.5
 - Resolves: rhbz#1659507 - SSSD's LDAP authentication provider does not work
                            if ID provider is authenticated with GSSAPI [rhel-7.6.z] 
 
-* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.3-4
+* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.4
 - Resolves: rhbz#1659083 - SSSD must be cleared/restarted periodically in
             order to retrieve AD users through IPA Trust [rhel-7.6.z]
 
-* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.3-3
+* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.3
 - Resolves: rhbz#1656833 - sssd_nss memory leak [rhel-7.6.z]
 
-* Wed Nov 28 2018 Michal Židek <mzidek@redhat.com> - 1.16.3-2
+* Wed Nov 28 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.2
 - Resolves: Bug 1649784 - SSSD not fetching all sudo rules from
                           AD [rhel-7.6.z] 
 
-* Wed Nov 14 2018 Michal Židek <mzidek@redhat.com> - 1.16.3-1
+* Wed Nov 14 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.1
 - Resolves: rhbz#1645047 - sssd only sets the SELinux login context if it
                            differs from the default [rhel-7.6.z]
 

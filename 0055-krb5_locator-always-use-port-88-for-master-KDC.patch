@@ -1,0 +1,402 @@
+From 941a381d7a7be2af73e41bd584aca4d22675d765 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Fri, 15 Feb 2019 16:54:19 +0100
+Subject: [PATCH] krb5_locator: always use port 88 for master KDC
+
+If the kpasswdinfo file exists and the found IP address includes a port
+number as well the master KDC lookup will use this port number which is
+most probably wrong. Better use the default port 88 always for master
+KDC lookups.
+
+This patch also updates the man page for the locator plugin which was
+quite outdated.
+
+Related to https://pagure.io/SSSD/sssd/issue/3958
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 05350abdf2ab98770ca296b9485578218644a2a7)
+---
+ src/krb5_plugin/sssd_krb5_locator_plugin.c    |  43 +++--
+ src/man/sssd_krb5_locator_plugin.8.xml        |  76 +++++----
+ .../cmocka/test_sssd_krb5_locator_plugin.c    | 156 ++++++++++++++++++
+ 3 files changed, 233 insertions(+), 42 deletions(-)
+
+diff --git a/src/krb5_plugin/sssd_krb5_locator_plugin.c b/src/krb5_plugin/sssd_krb5_locator_plugin.c
+index 952d487c2..fc5a4235d 100644
+--- a/src/krb5_plugin/sssd_krb5_locator_plugin.c
++++ b/src/krb5_plugin/sssd_krb5_locator_plugin.c
+@@ -80,6 +80,7 @@ struct sssd_ctx {
+     struct addr_port *kpasswd_addr;
+     bool debug;
+     bool disabled;
++    bool kpasswdinfo_used;
+ };
+ 
+ void plugin_debug_fn(const char *format, ...)
+@@ -411,6 +412,7 @@ krb5_error_code sssd_krb5_locator_init(krb5_context context,
+         ctx->disabled = true;
+         PLUGIN_DEBUG(("SSSD KRB5 locator plugin is disabled.\n"));
+     }
++    ctx->kpasswdinfo_used = false;
+ 
+     *private_data = ctx;
+ 
+@@ -451,6 +453,7 @@ krb5_error_code sssd_krb5_locator_lookup(void *private_data,
+     struct addr_port *addr = NULL;
+     char port_str[PORT_STR_SIZE];
+     size_t c;
++    bool force_port = false;
+ 
+     if (private_data == NULL) return KRB5_PLUGIN_NO_HANDLE;
+     ctx = (struct sssd_ctx *) private_data;
+@@ -478,20 +481,24 @@ krb5_error_code sssd_krb5_locator_lookup(void *private_data,
+             return KRB5_PLUGIN_NO_HANDLE;
+         }
+ 
+-        if (svc == locate_service_kadmin || svc == locate_service_kpasswd ||
+-            svc == locate_service_master_kdc) {
+-            ret = get_krb5info(realm, ctx, locate_service_kpasswd);
++    }
++
++    if (ctx->kpasswd_addr == NULL
++            && (svc == locate_service_kadmin || svc == locate_service_kpasswd ||
++                svc == locate_service_master_kdc)) {
++        ret = get_krb5info(realm, ctx, locate_service_kpasswd);
++        if (ret != EOK) {
++            PLUGIN_DEBUG(("reading kpasswd address failed, "
++                          "using kdc address.\n"));
++            free_addr_port_list(&(ctx->kpasswd_addr));
++            ret = copy_addr_port_list(ctx->kdc_addr, true,
++                                      &(ctx->kpasswd_addr));
+             if (ret != EOK) {
+-                PLUGIN_DEBUG(("reading kpasswd address failed, "
+-                              "using kdc address.\n"));
+-                free_addr_port_list(&(ctx->kpasswd_addr));
+-                ret = copy_addr_port_list(ctx->kdc_addr, true,
+-                                          &(ctx->kpasswd_addr));
+-                if (ret != EOK) {
+-                    PLUGIN_DEBUG(("copying address list failed.\n"));
+-                    return KRB5_PLUGIN_NO_HANDLE;
+-                }
++                PLUGIN_DEBUG(("copying address list failed.\n"));
++                return KRB5_PLUGIN_NO_HANDLE;
+             }
++        } else {
++            ctx->kpasswdinfo_used = true;
+         }
+     }
+ 
+@@ -507,6 +514,12 @@ krb5_error_code sssd_krb5_locator_lookup(void *private_data,
+         case locate_service_master_kdc:
+             addr = ctx->kpasswd_addr;
+             default_port = DEFAULT_KERBEROS_PORT;
++            if (ctx->kpasswdinfo_used) {
++                /* Use default port if the addresses from the kpasswdinfo
++                 * files are used because the port numbers from the file will
++                 * most probably not be suitable. */
++                force_port = true;
++            }
+             break;
+         case locate_service_kadmin:
+             addr = ctx->kpasswd_addr;
+@@ -539,11 +552,13 @@ krb5_error_code sssd_krb5_locator_lookup(void *private_data,
+             return KRB5_PLUGIN_NO_HANDLE;
+     }
+ 
+-    if (strcmp(realm, ctx->sssd_realm) != 0)
++    if (strcmp(realm, ctx->sssd_realm) != 0 || addr == NULL) {
+         return KRB5_PLUGIN_NO_HANDLE;
++    }
+ 
+     for (c = 0; addr[c].addr != NULL; c++) {
+-        port = (addr[c].port == 0 ? default_port : addr[c].port);
++        port = ((addr[c].port == 0 || force_port) ? default_port
++                                                  : addr[c].port);
+         memset(port_str, 0, PORT_STR_SIZE);
+         ret = snprintf(port_str, PORT_STR_SIZE-1, "%u", port);
+         if (ret < 0 || ret >= (PORT_STR_SIZE-1)) {
+diff --git a/src/man/sssd_krb5_locator_plugin.8.xml b/src/man/sssd_krb5_locator_plugin.8.xml
+index d28546012..d77f59d6a 100644
+--- a/src/man/sssd_krb5_locator_plugin.8.xml
++++ b/src/man/sssd_krb5_locator_plugin.8.xml
+@@ -20,40 +20,60 @@
+         <title>DESCRIPTION</title>
+         <para>
+             The Kerberos locator plugin
+-            <command>sssd_krb5_locator_plugin</command> is used by the Kerberos
+-            provider of
+-            <citerefentry>
+-                <refentrytitle>sssd</refentrytitle>
+-                <manvolnum>8</manvolnum>
+-            </citerefentry>
+-            to tell the Kerberos libraries what Realm and which KDC to use.
+-            Typically this is done in
++            <command>sssd_krb5_locator_plugin</command> is used by libkrb5 to
++            find KDCs for a given Kerberos realm. SSSD provides such a plugin to
++            guide all Kerberos clients on a system to a single KDC. In general
++            it should not matter to which KDC a client process is talking to.
++            But there are cases, e.g. after a password change, where not all
++            KDCs are in the same state because the new data has to be replicated
++            first. To avoid unexpected authentication failures and maybe even
++            account lockings it would be good to talk to a single KDC as long as
++            possible.
++        </para>
++        <para>
++            libkrb5 will search the locator plugin in the libkrb5 sub-directory
++            of the Kerberos plugin directory, see plugin_base_dir in
+             <citerefentry>
+                 <refentrytitle>krb5.conf</refentrytitle>
+                 <manvolnum>5</manvolnum>
+             </citerefentry>
+-            which is always read by the Kerberos libraries. To simplify the
+-            configuration the Realm and the KDC can be defined in
+-            <citerefentry>
+-                <refentrytitle>sssd.conf</refentrytitle>
+-                <manvolnum>5</manvolnum>
+-            </citerefentry>
+-            as described in
+-            <citerefentry>
+-                <refentrytitle>sssd-krb5</refentrytitle>
+-                <manvolnum>5</manvolnum>
+-            </citerefentry>
++            for details. The plugin can only be disabled by removing the plugin
++            file. There is no option in the Kerberos configuration to disable
++            it. But the SSSD_KRB5_LOCATOR_DISABLE environment variable can be
++            used to disable the plugin for individual commands. Alternatively
++            the SSSD option krb5_use_kdcinfo=False can be used to not generate
++            the data needed by the plugin. With this the plugin is still
++            called but will provide no data to the caller so that libkrb5 can
++            fall back to other methods defined in krb5.conf.
+         </para>
+         <para>
+-            <citerefentry>
+-                <refentrytitle>sssd</refentrytitle>
+-                <manvolnum>8</manvolnum>
+-            </citerefentry>
+-            puts the Realm and the name or IP address of the KDC into the
+-            environment variables SSSD_KRB5_REALM and SSSD_KRB5_KDC respectively.
+-            When <command>sssd_krb5_locator_plugin</command> is called by the
+-            kerberos libraries it reads and evaluates these variables and returns
+-            them to the libraries.
++            The plugin reads the information about the KDCs of a given realm
++            from a file called <filename>kdcinfo.REALM</filename>. The file
++            should contain one or more IP addresses either in dotted-decimal
++            IPv4 notation or the hexadecimal IPv6 notation. An optional port
++            number can be added to the end separated with a colon, the IPv6
++            address has to be enclosed in squared brackets in this case as
++            usual. Valid entries are:
++            <itemizedlist>
++                <listitem><para>1.2.3.4</para></listitem>
++                <listitem><para>5.6.7.8:99</para></listitem>
++                <listitem><para>2001:db8:85a3::8a2e:370:7334</para></listitem>
++                <listitem><para>[2001:db8:85a3::8a2e:370:7334]:321</para></listitem>
++            </itemizedlist>
++            SSSD's krb5 auth-provider which is used by the IPA and AD providers
++            as well adds the address of the current KDC or domain controller
++            SSSD is using to this file.
++        </para>
++        <para>
++            In environments with read-only and read-write KDCs where clients are
++            expected to use the read-only instances for the general operations
++            and only the read-write KDC for config changes like password changes
++            a <filename>kpasswdinfo.REALM</filename> is used as well to identify
++            read-write KDCs. If this file exists for the given realm the content
++            will be used by the plugin to reply to requests for a kpasswd or
++            kadmin server or for the MIT Kerberos specific master KDC. If the
++            address contains a port number the default KDC port 88 will be used
++            for the latter.
+         </para>
+     </refsect1>
+ 
+diff --git a/src/tests/cmocka/test_sssd_krb5_locator_plugin.c b/src/tests/cmocka/test_sssd_krb5_locator_plugin.c
+index 3e7d00632..1b6838345 100644
+--- a/src/tests/cmocka/test_sssd_krb5_locator_plugin.c
++++ b/src/tests/cmocka/test_sssd_krb5_locator_plugin.c
+@@ -44,6 +44,9 @@
+ #define TEST_IP_1_WITH_SERVICE TEST_IP_1":"TEST_SERVICE_1
+ #define TEST_IPV6_1_WITH_SERVICE TEST_IPV6_1":"TEST_SERVICE_2
+ 
++#define TEST_IP_1_WITH_SERVICE_2 TEST_IP_1":"TEST_SERVICE_2
++#define TEST_IPV6_1_WITH_SERVICE_1 TEST_IPV6_1":"TEST_SERVICE_1
++
+ struct test_state {
+     void *dummy;
+ };
+@@ -61,6 +64,7 @@ static int setup(void **state)
+     *state = (void *)ts;
+ 
+     unlink(TEST_PUBCONF_PATH"/kdcinfo."TEST_REALM);
++    unlink(TEST_PUBCONF_PATH"/kpasswdinfo."TEST_REALM);
+     rmdir(TEST_PUBCONF_PATH);
+ 
+     return 0;
+@@ -574,7 +578,157 @@ void test_service(void **state)
+ 
+     k5_free_serverlist(&list);
+ 
++    /* locate_service_master_kdc should get the default port 88 if kpasswdinfo
++     * does not exists. */
++    kerr = sssd_krb5_locator_lookup(priv, locate_service_master_kdc, TEST_REALM,
++                                    SOCK_DGRAM, AF_INET, module_callback,
++                                    &cbdata);
++    assert_int_equal(kerr, 0);
++    assert_int_equal(list.nservers, 1);
++    assert_non_null(list.servers);
++    ret = getnameinfo((struct sockaddr *) &list.servers[0].addr,
++                      list.servers[0].addrlen,
++                      host, sizeof(host), service, sizeof(service),
++                      NI_NUMERICHOST|NI_NUMERICSERV);
++    assert_int_equal(ret, 0);
++    assert_string_equal(TEST_IP_1, host);
++    assert_string_equal("88", service);
++
++    k5_free_serverlist(&list);
++
++    kerr = sssd_krb5_locator_lookup(priv, locate_service_master_kdc, TEST_REALM,
++                                    SOCK_DGRAM, AF_INET6, module_callback,
++                                    &cbdata);
++    assert_int_equal(kerr, 0);
++    assert_int_equal(list.nservers, 1);
++    assert_non_null(list.servers);
++    ret = getnameinfo((struct sockaddr *) &list.servers[0].addr,
++                      list.servers[0].addrlen,
++                      host, sizeof(host), service, sizeof(service),
++                      NI_NUMERICHOST|NI_NUMERICSERV);
++    assert_int_equal(ret, 0);
++    assert_string_equal(TEST_IPV6_1_PURE, host);
++    assert_string_equal("88", service);
++
++    k5_free_serverlist(&list);
++
++    unlink(TEST_PUBCONF_PATH"/kdcinfo."TEST_REALM);
++    rmdir(TEST_PUBCONF_PATH);
++    sssd_krb5_locator_close(priv);
++
++    krb5_free_context(ctx);
++}
++
++void test_kpasswd_and_master_kdc(void **state)
++{
++    krb5_context ctx;
++    krb5_error_code kerr;
++    void *priv;
++    int fd;
++    struct serverlist list = SERVERLIST_INIT;
++    struct module_callback_data cbdata = { 0 };
++    ssize_t s;
++    int ret;
++    char host[NI_MAXHOST];
++    char service[NI_MAXSERV];
++
++    cbdata.list = &list;
++
++    kerr = krb5_init_context (&ctx);
++    assert_int_equal(kerr, 0);
++
++    kerr = sssd_krb5_locator_init(ctx, &priv);
++    assert_int_equal(kerr, 0);
++
++    mkdir(TEST_PUBCONF_PATH, 0777);
++    fd = open(TEST_PUBCONF_PATH"/kdcinfo."TEST_REALM, O_CREAT|O_RDWR, 0777);
++    assert_int_not_equal(fd, -1);
++    s = write(fd, TEST_IP_1_WITH_SERVICE, sizeof(TEST_IP_1_WITH_SERVICE));
++    assert_int_equal(s, sizeof(TEST_IP_1_WITH_SERVICE));
++    s = write(fd, "\n", 1);
++    assert_int_equal(s, 1);
++    s = write(fd, TEST_IPV6_1_WITH_SERVICE, sizeof(TEST_IPV6_1_WITH_SERVICE));
++    assert_int_equal(s, sizeof(TEST_IPV6_1_WITH_SERVICE));
++    close(fd);
++    fd = open(TEST_PUBCONF_PATH"/kpasswdinfo."TEST_REALM, O_CREAT|O_RDWR, 0777);
++    assert_int_not_equal(fd, -1);
++    s = write(fd, TEST_IP_1_WITH_SERVICE_2, sizeof(TEST_IP_1_WITH_SERVICE_2));
++    assert_int_equal(s, sizeof(TEST_IP_1_WITH_SERVICE_2));
++    s = write(fd, "\n", 1);
++    assert_int_equal(s, 1);
++    s = write(fd, TEST_IPV6_1_WITH_SERVICE_1,
++              sizeof(TEST_IPV6_1_WITH_SERVICE_1));
++    assert_int_equal(s, sizeof(TEST_IPV6_1_WITH_SERVICE_1));
++    close(fd);
++
++    kerr = sssd_krb5_locator_lookup(priv, locate_service_kpasswd, TEST_REALM,
++                                    SOCK_DGRAM, AF_INET, module_callback,
++                                    &cbdata);
++    assert_int_equal(kerr, 0);
++    assert_int_equal(list.nservers, 1);
++    assert_non_null(list.servers);
++    ret = getnameinfo((struct sockaddr *) &list.servers[0].addr,
++                      list.servers[0].addrlen,
++                      host, sizeof(host), service, sizeof(service),
++                      NI_NUMERICHOST|NI_NUMERICSERV);
++    assert_int_equal(ret, 0);
++    assert_string_equal(TEST_IP_1, host);
++    assert_string_equal(TEST_SERVICE_2, service);
++
++    k5_free_serverlist(&list);
++
++    kerr = sssd_krb5_locator_lookup(priv, locate_service_kpasswd , TEST_REALM,
++                                    SOCK_DGRAM, AF_INET6, module_callback,
++                                    &cbdata);
++    assert_int_equal(kerr, 0);
++
++    assert_int_equal(list.nservers, 1);
++    assert_non_null(list.servers);
++    ret = getnameinfo((struct sockaddr *) &list.servers[0].addr,
++                      list.servers[0].addrlen,
++                      host, sizeof(host), service, sizeof(service),
++                      NI_NUMERICHOST|NI_NUMERICSERV);
++    assert_int_equal(ret, 0);
++    assert_string_equal(TEST_IPV6_1_PURE, host);
++    assert_string_equal(TEST_SERVICE_1, service);
++
++    k5_free_serverlist(&list);
++
++    /* locate_service_master_kdc should use the default KDC port 88 and not
++     * the one set in the kpasswdinfo file. */
++    kerr = sssd_krb5_locator_lookup(priv, locate_service_master_kdc, TEST_REALM,
++                                    SOCK_DGRAM, AF_INET, module_callback,
++                                    &cbdata);
++    assert_int_equal(kerr, 0);
++    assert_int_equal(list.nservers, 1);
++    assert_non_null(list.servers);
++    ret = getnameinfo((struct sockaddr *) &list.servers[0].addr,
++                      list.servers[0].addrlen,
++                      host, sizeof(host), service, sizeof(service),
++                      NI_NUMERICHOST|NI_NUMERICSERV);
++    assert_int_equal(ret, 0);
++    assert_string_equal(TEST_IP_1, host);
++    assert_string_equal("88", service);
++
++    k5_free_serverlist(&list);
+ 
++    kerr = sssd_krb5_locator_lookup(priv, locate_service_master_kdc, TEST_REALM,
++                                    SOCK_DGRAM, AF_INET6, module_callback,
++                                    &cbdata);
++    assert_int_equal(kerr, 0);
++    assert_int_equal(list.nservers, 1);
++    assert_non_null(list.servers);
++    ret = getnameinfo((struct sockaddr *) &list.servers[0].addr,
++                      list.servers[0].addrlen,
++                      host, sizeof(host), service, sizeof(service),
++                      NI_NUMERICHOST|NI_NUMERICSERV);
++    assert_int_equal(ret, 0);
++    assert_string_equal(TEST_IPV6_1_PURE, host);
++    assert_string_equal("88", service);
++
++    k5_free_serverlist(&list);
++
++    unlink(TEST_PUBCONF_PATH"/kpasswdinfo."TEST_REALM);
+     unlink(TEST_PUBCONF_PATH"/kdcinfo."TEST_REALM);
+     rmdir(TEST_PUBCONF_PATH);
+     sssd_krb5_locator_close(priv);
+@@ -606,6 +760,8 @@ int main(int argc, const char *argv[])
+                                         setup, teardown),
+         cmocka_unit_test_setup_teardown(test_service,
+                                         setup, teardown),
++        cmocka_unit_test_setup_teardown(test_kpasswd_and_master_kdc,
++                                        setup, teardown),
+     };
+ 
+     /* Set debug level to invalid value so we can decide if -d 0 was used. */
+-- 
+2.19.1
+
