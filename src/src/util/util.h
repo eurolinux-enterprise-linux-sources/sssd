@@ -539,7 +539,6 @@ struct sss_domain_info *find_domain_by_sid(struct sss_domain_info *domain,
 enum sss_domain_state sss_domain_get_state(struct sss_domain_info *dom);
 void sss_domain_set_state(struct sss_domain_info *dom,
                           enum sss_domain_state state);
-bool is_email_from_domain(const char *email, struct sss_domain_info *dom);
 bool sss_domain_is_forest_root(struct sss_domain_info *dom);
 const char *sss_domain_type_str(struct sss_domain_info *dom);
 
@@ -572,6 +571,12 @@ void sss_domain_info_set_output_fqnames(struct sss_domain_info *domain,
 
 bool sss_domain_info_get_output_fqnames(struct sss_domain_info *domain);
 
+bool sss_domain_is_mpg(struct sss_domain_info *domain);
+
+enum sss_domain_mpg_mode get_domain_mpg_mode(struct sss_domain_info *domain);
+const char *str_domain_mpg_mode(enum sss_domain_mpg_mode mpg_mode);
+enum sss_domain_mpg_mode str_to_domain_mpg_mode(const char *str_mpg_mode);
+
 #define IS_SUBDOMAIN(dom) ((dom)->parent != NULL)
 
 #define DOM_HAS_VIEWS(dom) ((dom)->has_views)
@@ -593,6 +598,10 @@ errno_t get_dom_names(TALLOC_CTX *mem_ctx,
                       struct sss_domain_info *start_dom,
                       char ***_dom_names,
                       int *_dom_names_count);
+
+/* Returns true if the provider used for the passed domain is the "files"
+ * one. Otherwise returns false. */
+bool is_files_provider(struct sss_domain_info *domain);
 
 /* from util_lock.c */
 errno_t sss_br_lock_file(int fd, size_t start, size_t len,
@@ -657,6 +666,7 @@ int sss_del_seuser(const char *login_name);
 int sss_get_seuser(const char *linuxuser,
                    char **selinuxuser,
                    char **level);
+int sss_seuser_exists(const char *linuxuser);
 
 /* convert time from generalized form to unix time */
 errno_t sss_utc_to_time_t(const char *str, const char *format, time_t *unix_time);
@@ -710,10 +720,17 @@ int sss_create_dir(const char *parent_dir_path,
 int selinux_file_context(const char *dst_name);
 int reset_selinux_file_context(void);
 
+/* from util_preauth.c */
+errno_t create_preauth_indicator(void);
+
 #ifdef SSSD_LIBEXEC_PATH
 #define P11_CHILD_LOG_FILE "p11_child"
 #define P11_CHILD_PATH SSSD_LIBEXEC_PATH"/p11_child"
 #define P11_CHILD_TIMEOUT_DEFAULT 10
 #endif  /* SSSD_LIBEXEC_PATH */
+
+#ifndef N_ELEMENTS
+#define N_ELEMENTS(arr) (sizeof(arr) / sizeof(arr[0]))
+#endif
 
 #endif /* __SSSD_UTIL_H__ */

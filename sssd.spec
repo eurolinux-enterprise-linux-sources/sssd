@@ -47,8 +47,8 @@
 %endif
 
 Name: sssd
-Version: 1.16.2
-Release: 13%{?dist}.8
+Version: 1.16.4
+Release: 21%{?dist}.1
 Group: Applications/System
 Summary: System Security Services Daemon
 License: GPLv3+
@@ -57,65 +57,45 @@ Source0: https://releases.pagure.org/SSSD/sssd/sssd-%{version}.tar.gz
 BuildRoot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 
 ### Patches ###
-Patch0001: 0001-krb5-locator-add-support-for-multiple-addresses.patch
-Patch0002: 0002-krb5-locator-fix-IPv6-support.patch
-Patch0003: 0003-krb5-locator-make-plugin-more-robust.patch
-Patch0004: 0004-krb5-locator-add-unit-tests.patch
-Patch0005: 0005-AD-IPA-Create-kdcinfo-file-for-sub-domains.patch
-Patch0006: 0006-krb5-refactor-removal-of-krb5info-files.patch
-Patch0007: 0007-krb5_common-add-callback-only-once.patch
-Patch0008: 0008-data-provider-run-offline-callbacks-only-once.patch
-Patch0009: 0009-TESTS-Extend-the-schema-with-sshPublicKey-attribute.patch
-Patch0010: 0010-TESTS-Allow-adding-sshPublicKey-for-users.patch
-Patch0011: 0011-TESTS-Add-a-basic-SSH-responder-test.patch
-Patch0012: 0012-SSH-Do-not-exit-abruptly-if-SSHD-closes-its-end-of-t.patch
-Patch0013: 0013-TESTS-Add-a-helper-binary-that-can-trigger-the-SIGPI.patch
-Patch0014: 0014-TESTS-Add-a-regression-test-for-SIGHUP-handling-in-s.patch
-Patch0015: 0015-Revert-LDAP-IPA-add-local-email-address-to-aliases.patch
-Patch0016: 0016-util-Remove-the-unused-function-is_email_from_domain.patch
-Patch0017: 0017-TESTS-Allow-storing-e-mail-address-for-users.patch
-Patch0018: 0018-TESTS-Add-regression-test-for-looking-up-users-with-.patch
-Patch0019: 0019-MAN-Remove-outdated-notes-from-the-re_expression-des.patch
-Patch0020: 0020-SUDO-Create-the-socket-with-stricter-permissions.patch
-Patch0021: 0021-MAN-Give-information-regarding-priority-of-ldap-look.patch
-Patch0022: 0022-AD-LDAP-Do-not-misuse-the-ignore_mark_offline-to-che.patch
-Patch0023: 0023-AD-expose-the-helper-function-to-format-the-site-DNS.patch
-Patch0024: 0024-RESOLV-Add-a-resolv_hostport_list-request.patch
-Patch0025: 0025-KRB5-IPA-AD-Add-a-utility-function-to-create-a-krb5_.patch
-Patch0026: 0026-KRB5-Allow-writing-multiple-addresses-to-the-kdcinfo.patch
-Patch0027: 0027-IPA-Add-the-options-that-the-IPA-subdomains-code-wil.patch
-Patch0028: 0028-IPA-Populate-kdcinfo-files-on-trust-clients-with-con.patch
-Patch0029: 0029-MAN-Document-the-options-available-for-AD-trusted-do.patch
-Patch0030: 0030-AD-consider-resource_groups-in-PAC-as-well.patch
-Patch0031: 0031-LDAP-Remove-the-legacy-POSIX-check-itself.patch
-Patch0032: 0032-LDAP-AD-Remove-the-legacy-POSIX-check-from-user-grou.patch
-Patch0033: 0033-AD-Remove-the-legacy-check-from-ad_get_account_domai.patch
-Patch0034: 0034-AD-Add-Global-Catalog-usability-check-in-subdomain-c.patch
-Patch0035: 0035-SDAP-Detect-schemaNamingContext-from-the-rootDSE.patch
-Patch0036: 0036-deskprofile-don-t-bail-if-we-fail-to-save-one-profil.patch
-Patch0037: 0037-SUDO-Fix-running-in-unprivileged-responder.patch
-Patch0038: 0038-SUDO-Root-should-be-able-to-read-write-sssd-sudo-soc.patch
-Patch0039: 0039-sdap-respect-passwordGracelimit.patch
-Patch0040: 0040-MC-Remove-check-if-record-is-in-the-mapped-address-s.patch
-Patch0041: 0041-Revert-CRYPTO-Suppress-warning-Wstringop-truncation.patch
-Patch0042: 0042-Revert-Revert-CRYPTO-Suppress-warning-Wstringop-trun.patch
-Patch0043: 0043-CRYPTO-Save-prefix-in-s3crypt_sha512.patch
-Patch0044: 0044-crypto-tests-Add-unit-test-for-s3crypt_sha512.patch
-Patch0045: 0045-SSS_CERT-Close-file-descriptors-after-executing-p11_.patch
-Patch0046: 0046-SELINUX-Also-call-is_selinux_enabled-as-a-check-for-.patch
-Patch0047: 0047-SELINUX-Always-add-SELinux-user-to-the-semanage-data.patch
-Patch0048: 0048-sudo-respect-case-sensitivity-in-sudo-responder.patch
-Patch0049: 0049-nss-use-enumeration-context-as-talloc-parent-for-cac.patch
-Patch0050: 0050-Revert-IPA-use-forest-name-when-looking-up-the-Globa.patch
-Patch0051: 0051-ipa-use-only-the-global-catalog-service-of-the-fores.patch
-Patch0052: 0052-LDAP-minor-refactoring-in-auth_send-to-conform-to-ou.patch
-Patch0053: 0053-LDAP-Only-authenticate-the-auth-connection-if-we-nee.patch
-Patch0054: 0054-LDAP-Log-the-encryption-used-during-LDAP-authenticat.patch
-Patch0055: 0055-krb5_locator-always-use-port-88-for-master-KDC.patch
-Patch0056: 0056-NSS-Avoid-changing-the-memory-cache-ownership-away-f.patch
+Patch0001: 0001-Providers-Delay-online-check-on-startup.patch
+Patch0002: 0002-KCM-Fall-back-to-using-the-first-ccache-if-the-defau.patch
+Patch0003: 0003-GPO-Add-option-ad_gpo_ignore_unreadable.patch
+Patch0004: 0004-AD-Allow-configuring-auto_private_groups-per-subdoma.patch
+Patch0005: 0005-ipa-store-sudo-runas-attribute-with-internal-fqname.patch
+Patch0006: 0006-sudo-format-runas-attributes-to-correct-output-name.patch
+Patch0007: 0007-SYSDB-Inherit-cached_auth_timeout-from-the-main-doma.patch
+Patch0008: 0008-krb5-Do-not-use-unindexed-objectCategory-in-a-search.patch
+Patch0009: 0009-SYSDB-Index-the-ccacheFile-attribute.patch
+Patch0010: 0010-krb5-Silence-an-error-message-if-no-cache-entries-ha.patch
+Patch0011: 0011-Util-added-facility-to-load-nss-lib-syms.patch
+Patch0012: 0012-responder-negcache-avoid-calling-nsswitch-NSS-API.patch
+Patch0013: 0013-negcache_files-got-rid-of-large-array-on-stack.patch
+Patch0014: 0014-TESTS-moved-cwrap-test_negcache-to-cmocka-tests.patch
+Patch0015: 0015-ci-sssd.supp-getpwuid-leak-suppression.patch
+Patch0016: 0016-pam-introduce-prompt_config-struct.patch
+Patch0017: 0017-authtok-add-dedicated-type-for-2fa-with-single-strin.patch
+Patch0018: 0018-pam_sss-use-configured-prompting.patch
+Patch0019: 0019-PAM-add-initial-prompting-configuration.patch
+Patch0020: 0020-getsockopt_wrapper-add-support-for-PAM-clients.patch
+Patch0021: 0021-intg-add-test-for-password-prompt-configuration.patch
+Patch0022: 0022-krb5-Write-multiple-dnsnames-into-kdc-info-file.patch
+Patch0023: 0023-krb5-Lookahead-resolving-of-host-names.patch
+Patch0024: 0024-SDAP-Add-sdap_has_deref_support_ex.patch
+Patch0025: 0025-IPA-Use-dereference-for-host-groups-even-if-the-conf.patch
+Patch0026: 0026-PAM-Also-cache-SSS_PAM_PREAUTH.patch
+Patch0027: 0027-winbind-idmap-plugin-update-struct-idmap_domain-to-l.patch
+Patch0028: 0028-DP-add-NULL-check-to-be_ptask_-enable-disable.patch
+Patch0029: 0029-LDAP-Return-the-error-message-from-the-extended-oper.patch
+Patch0030: 0030-SDAP-allow-GSS-SPNEGO-for-LDAP-SASL-bind-as-well.patch
+Patch0031: 0031-sdap-inherit-SDAP_SASL_MECH-if-not-set-explicitly.patch
+Patch0032: 0032-Translation-Update-japanese-translation.patch
+Patch0033: 0033-Translation-Add-missing-newlines-in-the-ja-po-file.patch
+Patch0034: 0034-TESTS-Add-a-unit-test-for-UPNs-stored-by-sss_ncache_.patch
+Patch0035: 0035-negcache-add-fq-usernames-of-know-domains-to-all-UPN.patch
 
 #This patch should not be removed in RHEL-7
 Patch999: 0999-NOUPSTREAM-Default-to-root-if-sssd-user-is-not-spec
+Patch1000: 1000-DOWNSTREAM-Use-OpenSSL-for-the-obfuscation-code.patch
 
 ### Dependencies ###
 
@@ -149,6 +129,9 @@ BuildRequires: popt-devel
 BuildRequires: libtalloc-devel
 BuildRequires: libtevent-devel
 BuildRequires: libtdb-devel
+
+# Needed since this downstream only fix: rhbz#1524566
+BuildRequires: openssl-devel
 
 # LDB needs a strict version match to build
 BuildRequires: libldb-devel >= %{ldb_version}
@@ -648,6 +631,7 @@ autoreconf -ivf
     %{?with_idmap_version}
 
 make %{?_smp_mflags} all docs
+make -C po ja.gmo # TODO: Rebuild all gmo files all remove this in next rebase
 
 %check
 export CK_TIMEOUT_MULTIPLIER=10
@@ -1265,35 +1249,110 @@ systemctl try-restart sssd >/dev/null 2>&1 || :
 }
 
 %changelog
-* Tue Mar 26 2019 Michal Židek <mzidek@redhat.com> - 1.16.2-13.8
-- Resolves: rhbz#1690759 - RHEL STIG pointing sssd Packaging issue [rhel-7.6.z]
-                         - Part 2.
+* Wed Oct 09 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-21.1
+- Resolves: rhbz#1758566 - negative cache does not use values from 'filter_users'
+                           config option for known domains [rhel-7.7.z]
 
-* Tue Mar 26 2019 Michal Židek <mzidek@redhat.com> - 1.16.2-13.7
-- Resolves: rhbz#1690759 - RHEL STIG pointing sssd Packaging issue [rhel-7.6.z]
+* Fri Jun 07 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-21
+- Resolves: rhbz#1714952 - [sssd] RHEL 7.7 Tier 0 Localization
+- Rebuild japanese gmo file explicitly
 
-* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.6
-- Resolves: rhbz#1683578 - sssd_krb5_locator_plugin introduces delay in
-                           cifs.upcall krb5 calls [rhel-7.6.z]
+* Fri Jun 07 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-20
+- Resolves: rhbz#1714952 - [sssd] RHEL 7.7 Tier 0 Localization
 
-* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.5
-- Resolves: rhbz#1659507 - SSSD's LDAP authentication provider does not work
-                           if ID provider is authenticated with GSSAPI [rhel-7.6.z] 
+* Tue May 28 2019 Jakub Hrozek <jhrozek@redhat.com> - 1.16.4-19
+- Resolves: rhbz#1707959 - sssd does not properly check GSS-SPNEGO
 
-* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.4
-- Resolves: rhbz#1659083 - SSSD must be cleared/restarted periodically in
-            order to retrieve AD users through IPA Trust [rhel-7.6.z]
+* Tue May 28 2019 Jakub Hrozek <jhrozek@redhat.com> - 1.16.4-18
+- Resolves: rhbz#1710286 - The server error message is not returned if
+                           password change fails
 
-* Tue Dec 18 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.3
-- Resolves: rhbz#1656833 - sssd_nss memory leak [rhel-7.6.z]
+* Tue May 28 2019 Jakub Hrozek <jhrozek@redhat.com> - 1.16.4-17
+- Resolves: rhbz#1711832 - The files provider does not handle resetOffline
+                           properly
 
-* Wed Nov 28 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.2
-- Resolves: Bug 1649784 - SSSD not fetching all sudo rules from
-                          AD [rhel-7.6.z] 
+* Mon May 20 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-16
+- Resolves: rhbz#1707759 - Error accessing files on samba share randomly
 
-* Wed Nov 14 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-13.1
-- Resolves: rhbz#1645047 - sssd only sets the SELinux login context if it
-                           differs from the default [rhel-7.6.z]
+* Mon May 20 2019 Jakub Hrozek <jhrozek@redhat.com> - 1.16.4-15
+- Resolves: rhbz#1685581 - Extend cached_auth_timeout to cover subdomains
+                           /trusts
+
+* Mon Apr 15 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-14
+- Resolves: rhbz#1684979 - The HBAC code requires dereference to be enabled
+                           and fails otherwise
+
+* Mon Apr 15 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-12
+- Resolves: rhbz#1576524 - RHEL STIG pointing sssd Packaging issue
+                         - This was partially fixed by the rebase, but one
+                           spec file change was missing.
+
+* Mon Apr 15 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-12
+- Resolves: rhbz#1524566 - FIPS mode breaks using pysss.so (sss_obfuscate)
+
+* Thu Apr 04 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-11
+- Resolves: rhbz#1350012 - kinit / sssd kerberos fail over
+- Resolves: rhbz#720688 - [RFE] return multiple server addresses to the
+                          Kerberos locator plugin
+
+* Thu Apr 04 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-10
+- Resolves: rhbz#1402056 - [RFE] Make 2FA prompting configurable
+
+* Thu Apr 04 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-9
+- Resolves: rhbz#1666819 - SSSD can trigger a NSS lookup when parsing the
+                           filter_users/groups lists on startup, this can
+                           block the startup
+
+* Fri Mar 29 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-8
+- Resolves: rhbz#1645461 - Slow ldb search causes blocking during startup
+                           which might cause the registration to time out
+
+* Fri Mar 29 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-7
+- Resolves: rhbz#1685581 - Extend cached_auth_timeout to cover
+                           subdomains / trusts
+
+* Fri Mar 29 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-6
+- Resolves: rhbz#1671138 - User is unable to perform sudo as a user on IPA
+                           Server, even though `sudo -l` shows permissions
+                           to do so
+
+* Fri Mar 29 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-5
+- Resolves: rhbz#1657806 - [RFE]: Optionally disable generating auto private
+                           groups for subdomains of an AD provider
+
+* Fri Mar 29 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-4
+- Resolves: rhbz#1641131 - [RFE] Need an option in SSSD so that it will skip
+                           GPOs that have groupPolicyContainers, unreadable
+                           by SSSD.
+- Resolves: rhbz#1660874 - CVE-2018-16838 sssd: improper implementation of
+                           GPOs due to too restrictive permissions [rhel-7]
+
+* Fri Mar 29 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-3
+- Resolves: rhbz#1631656 - KCM: kinit: Matching credential not found while
+                           getting default ccache
+
+* Fri Mar 29 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-2
+- Resolves: rhbz#1406678 - sssd service is starting before network service
+- Resolves: rhbz#1616853 - SSSD always boots in Offline mode
+
+* Thu Mar 21 2019 Michal Židek <mzidek@redhat.com> - 1.16.4-1
+- Resolves: rhbz#1658994 - Rebase SSSD to 1.16.x
+
+* Wed Mar 20 2019 Jakub Hrozek <jhrozek@redhat.com> - 1.16.2-17
+- Resolves: rhbz#1603311 - Enable generating user private groups only for
+                           users with uid == gid where gid does not
+                           correspond to a real LDAP group
+
+* Wed Nov 28 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-16
+- Resolves: rhbz#1602172 - SSSD's LDAP authentication provider does not work
+                           if ID provider is authenticated with GSSAPI 
+
+* Thu Nov 15 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-15
+- Resolves: rhbz#1622109 -  SSSD not fetching all sudo rules from AD
+
+* Wed Nov 14 2018 Michal Židek <mzidek@redhat.com> - 1.16.2-14
+- Resolves: rhbz#1619706 - sssd only sets the SELinux login context if it
+                           differs from the default
 
 * Wed Sep  5 2018 Jakub Hrozek <jhrozek@redhat.com> - 1.16.2-13
 - Resolves: rhbz#1593756 - sssd needs to require a newer version of

@@ -131,6 +131,7 @@
 #define CONFDB_PAM_CERT_DB_PATH "pam_cert_db_path"
 #define CONFDB_PAM_P11_CHILD_TIMEOUT "p11_child_timeout"
 #define CONFDB_PAM_APP_SERVICES "pam_app_services"
+#define CONFDB_PAM_P11_ALLOWED_SERVICES "pam_p11_allowed_services"
 
 /* SUDO */
 #define CONFDB_SUDO_CONF_ENTRY "config/sudo"
@@ -299,6 +300,12 @@ enum sss_domain_type {
     DOM_TYPE_APPLICATION,
 };
 
+enum sss_domain_mpg_mode {
+    MPG_DISABLED,
+    MPG_ENABLED,
+    MPG_HYBRID,
+};
+
 /**
  * Data structure storing all of the basic features
  * of a domain.
@@ -313,7 +320,7 @@ struct sss_domain_info {
     bool enumerate;
     char **sd_enumerate;
     bool fqnames;
-    bool mpg;
+    enum sss_domain_mpg_mode mpg_mode;
     bool ignore_group_members;
     uint32_t id_min;
     uint32_t id_max;

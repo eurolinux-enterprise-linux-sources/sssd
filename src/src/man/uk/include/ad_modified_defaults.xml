@@ -61,16 +61,34 @@
             </listitem>
             <listitem>
                 <para>
-                    ldap_sasl_authid = sAMAccountName@REALM (typically SHORTNAME$@REALM)
+                    ldap_sasl_authid = sAMAccountName@ОБЛАСТЬ (типово SHORTNAME$@ОБЛАСТЬ)
                 </para>
                 <para>
-                    The AD provider looks for a different principal than the LDAP provider by
-default, because in an Active Directory environment the principals are
-divided into two groups - User Principals and Service Principals. Only User
-Principal can be used to obtain a TGT and by default, computer object's
-principal is constructed from its sAMAccountName and the AD realm. The
-well-known host/hostname@REALM principal is a Service Principal and thus
-cannot be used to get a TGT with.
+                    Засіб надання даних AD типово шукає інші реєстраційні записи, ніж засіб
+надання даних LDAP, оскільки у середовищі Active Directory реєстраційні
+записи поділено на дві групи — реєстраційні записи користувачів і
+реєстраційні записи служб. Для отримання TGT типово може бути використано
+лише реєстраційний запис користувача, реєстраційні записи об'єктів
+комп'ютерів будуються на основі sAMAccountName та області AD. Широко відомий
+реєстраційний запис host/hostname@REALM є реєстраційним записом служби, отже
+не може бути використаний для отримання TGT.
+                </para>
+            </listitem>
+        </itemizedlist>
+    </refsect2>
+    <refsect2 id='nss_modifications'>
+        <title>Налаштування NSS</title>
+        <itemizedlist>
+            <listitem>
+                <para>
+                    fallback_homedir = /home/%d/%u
+                </para>
+                <para>
+                    Засіб надання даних AD автоматично встановлює «fallback_homedir =
+/home/%d/%u» для надання особистих домашніх каталогів для записів
+користувачів без атрибута homeDirectory. Якщо ваш домен AD належним чином
+заповнено щодо атрибутів Posix і ви хочете уникнути такої резервної
+поведінки, ви можете явним чином вказати «fallback_homedir = %o».
                 </para>
             </listitem>
         </itemizedlist>

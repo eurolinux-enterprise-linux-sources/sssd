@@ -1,0 +1,127 @@
+From 934341e1ef7cf2a763b604dd1fd347aa5aae7f60 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Mon, 24 Jun 2019 14:01:02 +0200
+Subject: [PATCH 35/35] negcache: add fq-usernames of know domains to all UPN
+ neg-caches
+
+The previous patch for this issue did not handle user with
+fully-qualified names from known domains correctly. Here the user was
+only added to the negative cache of the known domain but not to the
+negative UPN caches for all domains. This patch fixes this.
+
+Related to https://pagure.io/SSSD/sssd/issue/3978
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit e7e212b49bbd357129aab410cbbd5c7b1b0965a2)
+---
+ src/responder/common/negcache.c  | 54 ++++++++++++++++----------------
+ src/tests/cmocka/test_negcache.c | 17 +++++++++-
+ 2 files changed, 43 insertions(+), 28 deletions(-)
+
+diff --git a/src/responder/common/negcache.c b/src/responder/common/negcache.c
+index d6f72d816..d9bf1417e 100644
+--- a/src/responder/common/negcache.c
++++ b/src/responder/common/negcache.c
+@@ -1070,37 +1070,37 @@ errno_t sss_ncache_prepopulate(struct sss_nc_ctx *ncache,
+             continue;
+         }
+         if (domainname) {
+-            dom = responder_get_domain(rctx, domainname);
+-            if (!dom) {
+-                DEBUG(SSSDBG_CRIT_FAILURE,
+-                      "Unknown domain name [%s], assuming [%s] is UPN\n",
+-                      domainname, filter_list[i]);
+-                for (dom = domain_list;
+-                     dom != NULL;
+-                     dom = get_next_domain(dom, SSS_GND_ALL_DOMAINS)) {
+-                    ret = sss_ncache_set_upn(ncache, true, dom, filter_list[i]);
+-                    if (ret != EOK) {
+-                        DEBUG(SSSDBG_OP_FAILURE,
+-                              "sss_ncache_set_upn failed (%d [%s]), ignored\n",
+-                              ret, sss_strerror(ret));
+-                    }
++            DEBUG(SSSDBG_TRACE_ALL,
++                  "Adding [%s] to UPN negative cache of all domains.\n",
++                  filter_list[i]);
++            for (dom = domain_list;
++                 dom != NULL;
++                 dom = get_next_domain(dom, SSS_GND_ALL_DOMAINS)) {
++                ret = sss_ncache_set_upn(ncache, true, dom, filter_list[i]);
++                if (ret != EOK) {
++                    DEBUG(SSSDBG_OP_FAILURE,
++                          "sss_ncache_set_upn failed (%d [%s]), ignored\n",
++                          ret, sss_strerror(ret));
+                 }
+-                continue;
+             }
+ 
+-            fqname = sss_create_internal_fqname(tmpctx, name, dom->name);
+-            if (fqname == NULL) {
+-                continue;
+-            }
++            /* Add name to domain specific cache for known domain names */
++            dom = responder_get_domain(rctx, domainname);
++            if (dom != NULL) {
++                fqname = sss_create_internal_fqname(tmpctx, name, dom->name);
++                if (fqname == NULL) {
++                    continue;
++                }
+ 
+-            ret = sss_ncache_set_user(ncache, true, dom, fqname);
+-            talloc_zfree(fqname);
+-            if (ret != EOK) {
+-                DEBUG(SSSDBG_CRIT_FAILURE,
+-                      "Failed to store permanent user filter for [%s]"
+-                          " (%d [%s])\n", filter_list[i],
+-                          ret, strerror(ret));
+-                continue;
++                ret = sss_ncache_set_user(ncache, true, dom, fqname);
++                talloc_zfree(fqname);
++                if (ret != EOK) {
++                    DEBUG(SSSDBG_CRIT_FAILURE,
++                          "Failed to store permanent user filter for [%s]"
++                              " (%d [%s])\n", filter_list[i],
++                              ret, strerror(ret));
++                    continue;
++                }
+             }
+         } else {
+             for (dom = domain_list;
+diff --git a/src/tests/cmocka/test_negcache.c b/src/tests/cmocka/test_negcache.c
+index 9bddddd8d..0a7e563e0 100644
+--- a/src/tests/cmocka/test_negcache.c
++++ b/src/tests/cmocka/test_negcache.c
+@@ -618,7 +618,7 @@ static void test_sss_ncache_prepopulate(void **state)
+     struct sss_domain_info *subdomain;
+ 
+     struct sss_test_conf_param nss_params[] = {
+-        { "filter_users", "testuser_nss@UPN.REALM, testuser_nss_short" },
++        { "filter_users", "testuser_nss@UPN.REALM, testuser_nss_short, all_dom_upn@"TEST_DOM_NAME },
+         { NULL, NULL },
+     };
+     struct sss_test_conf_param dom_params[] = {
+@@ -733,6 +733,21 @@ static void test_sss_ncache_prepopulate(void **state)
+ 
+     ret = sss_ncache_check_upn(ncache, tc->dom, "testuser3@somedomain");
+     assert_int_equal(ret, EEXIST);
++
++    /* Fully qualified names with a known domain part should be added to all
++     * negative UPN caches and to the negative cache of the know domain. */
++    ret = sss_ncache_check_upn(ncache, tc->dom, "all_dom_upn@"TEST_DOM_NAME);
++    assert_int_equal(ret, EEXIST);
++
++    ret = sss_ncache_check_upn(ncache, tc->dom->subdomains,
++                               "all_dom_upn@"TEST_DOM_NAME);
++    assert_int_equal(ret, EEXIST);
++
++    ret = check_user_in_ncache(ncache, tc->dom, "all_dom_upn");
++    assert_int_equal(ret, EEXIST);
++
++    ret = check_user_in_ncache(ncache, tc->dom->subdomains, "all_dom_upn");
++    assert_int_equal(ret, ENOENT);
+ }
+ 
+ static void test_sss_ncache_default_domain_suffix(void **state)
+-- 
+2.20.1
+

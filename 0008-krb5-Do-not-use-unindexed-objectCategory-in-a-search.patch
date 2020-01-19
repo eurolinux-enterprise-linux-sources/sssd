@@ -1,0 +1,48 @@
+From e4dd2843a4a302ababd3ccedfbf23832244a1655 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Sat, 23 Mar 2019 21:53:05 +0100
+Subject: [PATCH] krb5: Do not use unindexed objectCategory in a search filter
+
+Related:
+https://pagure.io/SSSD/sssd/issue/3968
+
+Since we switched to using objectcategory instead of objectclass for
+users and groups, the objectCategory attribute is also not indexed. This
+means that searches using this attribute must traverse the whole
+database which can be very slow.
+
+This patch uses the cn=users container instead of the full sysdb
+container as the search base which is more or less equivalent to using
+objectCategory=user anyway.
+
+Reviewed-by: Alexey Tikhonov <atikhono@redhat.com>
+(cherry picked from commit e474c2dd305db654b42f2a123a6f60d12d7978c5)
+---
+ src/providers/krb5/krb5_renew_tgt.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/providers/krb5/krb5_renew_tgt.c b/src/providers/krb5/krb5_renew_tgt.c
+index 549c08c6f..c7e2bd91f 100644
+--- a/src/providers/krb5/krb5_renew_tgt.c
++++ b/src/providers/krb5/krb5_renew_tgt.c
+@@ -385,7 +385,7 @@ static errno_t check_ccache_files(struct renew_tgt_ctx *renew_tgt_ctx)
+ {
+     TALLOC_CTX *tmp_ctx;
+     int ret;
+-    const char *ccache_filter = "(&("SYSDB_CCACHE_FILE"=*)("SYSDB_UC"))";
++    const char *ccache_filter = SYSDB_CCACHE_FILE"=*";
+     const char *ccache_attrs[] = { SYSDB_CCACHE_FILE, SYSDB_UPN, SYSDB_NAME,
+                                    SYSDB_CANONICAL_UPN, NULL };
+     size_t msgs_count = 0;
+@@ -403,7 +403,7 @@ static errno_t check_ccache_files(struct renew_tgt_ctx *renew_tgt_ctx)
+         return ENOMEM;
+     }
+ 
+-    base_dn = sysdb_base_dn(renew_tgt_ctx->be_ctx->domain->sysdb, tmp_ctx);
++    base_dn = sysdb_user_base_dn(tmp_ctx, renew_tgt_ctx->be_ctx->domain);
+     if (base_dn == NULL) {
+         DEBUG(SSSDBG_OP_FAILURE, "sysdb_base_dn failed.\n");
+         ret = ENOMEM;
+-- 
+2.19.1
+

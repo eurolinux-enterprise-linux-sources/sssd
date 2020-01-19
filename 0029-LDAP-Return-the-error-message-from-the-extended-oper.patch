@@ -1,0 +1,57 @@
+From 4ab1b754a2659d8e75ae734987ed93f3e1ed047f Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Wed, 15 May 2019 21:20:26 +0200
+Subject: [PATCH 29/29] LDAP: Return the error message from the extended
+ operation password change also on failure
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Resolves: https://pagure.io/SSSD/sssd/issue/4015
+
+If password change fails, the tevent request would call
+TEVENT_REQ_RETURN_ON_ERROR before returning the error message that comes
+from the server, so the server message would not be propagated to the caller.
+
+This regressed in cf1d7ff
+
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit 9a4d5f0601b432b87c3bf93f7126d07e65993e0d)
+---
+ src/providers/ldap/ldap_auth.c  | 5 +++--
+ src/providers/ldap/sdap_async.c | 1 +
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/providers/ldap/ldap_auth.c b/src/providers/ldap/ldap_auth.c
+index 86724e388..4f416c1aa 100644
+--- a/src/providers/ldap/ldap_auth.c
++++ b/src/providers/ldap/ldap_auth.c
+@@ -1212,10 +1212,11 @@ sdap_pam_change_password_recv(TALLOC_CTX *mem_ctx,
+     struct sdap_pam_change_password_state *state;
+     state = tevent_req_data(req, struct sdap_pam_change_password_state);
+ 
+-    TEVENT_REQ_RETURN_ON_ERROR(req);
+-
++    /* We want to return the error message even on failure */
+     *_user_error_message = talloc_steal(mem_ctx, state->user_error_message);
+ 
++    TEVENT_REQ_RETURN_ON_ERROR(req);
++
+     return EOK;
+ }
+ 
+diff --git a/src/providers/ldap/sdap_async.c b/src/providers/ldap/sdap_async.c
+index 822baf06a..7e78e6b6e 100644
+--- a/src/providers/ldap/sdap_async.c
++++ b/src/providers/ldap/sdap_async.c
+@@ -696,6 +696,7 @@ errno_t sdap_exop_modify_passwd_recv(struct tevent_req *req,
+     struct sdap_exop_modify_passwd_state *state = tevent_req_data(req,
+                                          struct sdap_exop_modify_passwd_state);
+ 
++    /* We want to return the error message even on failure */
+     *user_error_message = talloc_steal(mem_ctx, state->user_error_message);
+ 
+     TEVENT_REQ_RETURN_ON_ERROR(req);
+-- 
+2.20.1
+

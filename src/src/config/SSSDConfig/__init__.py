@@ -103,6 +103,7 @@ option_strings = {
     'pam_cert_db_path' : _('Path to certificate database with PKCS#11 modules.'),
     'p11_child_timeout' : _('How many seconds will pam_sss wait for p11_child to finish'),
     'pam_app_services' : _('Which PAM services are permitted to contact application domains'),
+    'pam_p11_allowed_services' : _('Allowed services for using smartcards'),
 
     # [sudo]
     'sudo_timed' : _('Whether to evaluate the time-based attributes in sudo rules'),
@@ -280,6 +281,7 @@ option_strings = {
     'ldap_backup_uri' : _('ldap_backup_uri, The URI of the LDAP server'),
     'ldap_search_base' : _('The default base DN'),
     'ldap_schema' : _('The Schema Type in use on the LDAP server, rfc2307'),
+    'ldap_pwmodify_mode' : _('Mode used to change user password'),
     'ldap_default_bind_dn' : _('The default bind DN'),
     'ldap_default_authtok_type' : _('The type of the authentication token of the default bind DN'),
     'ldap_default_authtok' : _('The authentication token of the default bind DN'),
@@ -500,16 +502,14 @@ class SSSDConfigSchema(SSSDChangeConf):
             schemaplugindir = '${prefix}/share/sssd/sssd.api.d'
 
         try:
-            #Read the primary config file
-            fd = open(schemafile, 'r')
-            self.readfp(fd)
-            fd.close()
+            # Read the primary config file
+            with open(schemafile, 'r') as fd:
+                self.readfp(fd)
             # Read in the provider files
             for file in filter(lambda f: re.search(r'^sssd-.*\.conf$', f),
                                          os.listdir(schemaplugindir)):
-                fd = open(schemaplugindir+ "/" + file)
-                self.readfp(fd)
-                fd.close()
+                with open(schemaplugindir+ "/" + file) as fd:
+                    self.readfp(fd)
         except IOError:
             raise
         except SyntaxError: # can be raised with readfp
@@ -1452,14 +1452,12 @@ class SSSDConfig(SSSDChangeConf):
             #TODO: get this from a global setting
             configfile = '${prefix}/etc/sssd/sssd.conf'
         # open will raise an IOError if it fails
-        fd = open(configfile, 'r')
+        with open(configfile, 'r') as fd:
+            try:
+                self.readfp(fd)
+            except:
+                raise ParsingError
 
-        try:
-            self.readfp(fd)
-        except:
-            raise ParsingError
-
-        fd.close()
         self.configfile = configfile
         self.initialized = True
 
@@ -1523,10 +1521,9 @@ class SSSDConfig(SSSDChangeConf):
 
         # open() will raise IOError if it fails
         old_umask = os.umask(0o177)
-        of = open(outputfile, "wb")
-        output = self.dump(self.opts).encode('utf-8')
-        of.write(output)
-        of.close()
+        with open(outputfile, "wb") as of:
+            output = self.dump(self.opts).encode('utf-8')
+            of.write(output)
         os.umask(old_umask)
 
     def list_active_services(self):

@@ -1,0 +1,1107 @@
+From b08906169216fdec43008c38891145386017d12f Mon Sep 17 00:00:00 2001
+From: Alexey Tikhonov <atikhono@redhat.com>
+Date: Fri, 22 Mar 2019 16:06:49 +0100
+Subject: [PATCH 12/15] responder/negcache: avoid calling nsswitch NSS API
+
+Changed "negcache_files.c::is_*_local_by_*()" to use functions from
+"libnss_files" directly to check users (instead of calling glibc
+NSS API).
+Changed affected tests to avoid using NSS-wrapper and to use real
+local user&group (otherwise tests were broken).
+
+Resolves: https://pagure.io/SSSD/sssd/issue/3964
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 2b564f849a20289a857cf19bbfaa5c6eb8670bad)
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+---
+ Makefile.am                           |  20 +++
+ src/responder/common/negcache.c       |  52 +++++-
+ src/responder/common/negcache_files.c |  74 ++++-----
+ src/responder/common/negcache_files.h |  12 +-
+ src/tests/cwrap/Makefile.am           |   4 +
+ src/tests/cwrap/test_negcache.c       | 227 +++++++++++++++++++-------
+ src/tests/intg/test_ldap.py           | 114 ++++++-------
+ 7 files changed, 333 insertions(+), 170 deletions(-)
+
+diff --git a/Makefile.am b/Makefile.am
+index 05f5f4e26..6a67dc7b1 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -569,6 +569,7 @@ SSSD_RESPONDER_IFACE_OBJ = \
+ SSSD_RESPONDER_OBJ = \
+     src/responder/common/negcache_files.c \
+     src/responder/common/negcache.c \
++    src/util/nss_dl_load.c \
+     src/responder/common/responder_cmd.c \
+     src/responder/common/responder_common.c \
+     src/responder/common/responder_dp.c \
+@@ -1380,6 +1381,7 @@ sssd_nss_SOURCES = \
+     src/responder/nss/nsssrv_mmap_cache.c \
+     $(SSSD_RESPONDER_OBJ)
+ sssd_nss_LDADD = \
++    $(LIBADD_DL) \
+     $(TDB_LIBS) \
+     $(SSSD_LIBS) \
+     libsss_idmap.la \
+@@ -1396,6 +1398,7 @@ sssd_pam_SOURCES = \
+     src/responder/pam/pam_helpers.c \
+     $(SSSD_RESPONDER_OBJ)
+ sssd_pam_LDADD = \
++    $(LIBADD_DL) \
+     $(TDB_LIBS) \
+     $(SSSD_LIBS) \
+     $(SELINUX_LIBS) \
+@@ -1414,6 +1417,7 @@ sssd_sudo_SOURCES = \
+     src/responder/sudo/sudosrv_dp.c \
+     $(SSSD_RESPONDER_OBJ)
+ sssd_sudo_LDADD = \
++    $(LIBADD_DL) \
+     $(SSSD_LIBS) \
+     $(SYSTEMD_DAEMON_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS)
+@@ -1426,6 +1430,7 @@ sssd_autofs_SOURCES = \
+     src/responder/autofs/autofssrv_dp.c \
+     $(SSSD_RESPONDER_OBJ)
+ sssd_autofs_LDADD = \
++    $(LIBADD_DL) \
+     $(SSSD_LIBS) \
+     $(SYSTEMD_DAEMON_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS)
+@@ -1441,6 +1446,7 @@ sssd_ssh_SOURCES = \
+     $(SSSD_RESPONDER_OBJ) \
+     $(NULL)
+ sssd_ssh_LDADD = \
++    $(LIBADD_DL) \
+     $(SSSD_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS) \
+     $(SYSTEMD_DAEMON_LIBS) \
+@@ -1457,6 +1463,7 @@ sssd_pac_CFLAGS = \
+     $(AM_CFLAGS) \
+     $(NDR_KRB5PAC_CFLAGS)
+ sssd_pac_LDADD = \
++    $(LIBADD_DL) \
+     $(NDR_KRB5PAC_LIBS) \
+     $(TDB_LIBS) \
+     $(SSSD_LIBS) \
+@@ -1481,6 +1488,7 @@ sssd_ifp_SOURCES = \
+ sssd_ifp_CFLAGS = \
+     $(AM_CFLAGS)
+ sssd_ifp_LDADD = \
++    $(LIBADD_DL) \
+     $(SSSD_LIBS) \
+     $(SYSTEMD_DAEMON_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS) \
+@@ -1525,6 +1533,7 @@ sssd_secrets_SOURCES = \
+     $(SSSD_RESPONDER_OBJ) \
+     $(NULL)
+ sssd_secrets_LDADD = \
++    $(LIBADD_DL) \
+     $(HTTP_PARSER_LIBS) \
+     $(JANSSON_LIBS) \
+     $(TDB_LIBS) \
+@@ -1559,6 +1568,7 @@ sssd_kcm_CFLAGS = \
+     $(JANSSON_CFLAGS) \
+     $(NULL)
+ sssd_kcm_LDADD = \
++    $(LIBADD_DL) \
+     $(KRB5_LIBS) \
+     $(CURL_LIBS) \
+     $(JANSSON_LIBS) \
+@@ -2254,6 +2264,7 @@ responder_socket_access_tests_SOURCES = \
+     src/tests/responder_socket_access-tests.c \
+     src/responder/common/negcache_files.c \
+     src/responder/common/negcache.c \
++    src/util/nss_dl_load.c \
+     src/responder/common/responder_common.c \
+     src/responder/common/responder_packet.c \
+     src/responder/common/responder_cmd.c \
+@@ -2267,6 +2278,7 @@ responder_socket_access_tests_CFLAGS = \
+     $(AM_CFLAGS) \
+     $(CHECK_CFLAGS)
+ responder_socket_access_tests_LDADD = \
++    $(LIBADD_DL) \
+     $(CHECK_LIBS) \
+     $(SSSD_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS) \
+@@ -2358,6 +2370,7 @@ TEST_MOCK_RESP_OBJ = \
+      src/responder/common/responder_cmd.c \
+      src/responder/common/negcache_files.c \
+      src/responder/common/negcache.c \
++     src/util/nss_dl_load.c \
+      src/responder/common/responder_common.c \
+      src/responder/common/data_provider/rdp_message.c \
+      src/responder/common/data_provider/rdp_client.c \
+@@ -2409,6 +2422,7 @@ nss_srv_tests_LDFLAGS = \
+     -Wl,-wrap,sss_cmd_send_empty \
+     -Wl,-wrap,sss_cmd_done
+ nss_srv_tests_LDADD = \
++    $(LIBADD_DL) \
+     $(CMOCKA_LIBS) \
+     $(SSSD_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS) \
+@@ -2444,6 +2458,7 @@ pam_srv_tests_LDFLAGS = \
+     -Wl,-wrap,pam_dp_send_req \
+     $(NULL)
+ pam_srv_tests_LDADD = \
++    $(LIBADD_DL) \
+     $(CMOCKA_LIBS) \
+     $(PAM_LIBS) \
+     $(SSSD_LIBS) \
+@@ -2480,6 +2495,7 @@ ssh_srv_tests_LDFLAGS = \
+     -Wl,-wrap,ssh_dp_send_req \
+     $(NULL)
+ ssh_srv_tests_LDADD = \
++    $(LIBADD_DL) \
+     $(CMOCKA_LIBS) \
+     $(SSSD_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS) \
+@@ -2499,6 +2515,7 @@ responder_get_domains_tests_LDFLAGS = \
+     -Wl,-wrap,sss_parse_name_for_domains \
+     -Wl,-wrap,sss_ncache_reset_repopulate_permanent
+ responder_get_domains_tests_LDADD = \
++    $(LIBADD_DL) \
+     $(CMOCKA_LIBS) \
+     $(SSSD_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS) \
+@@ -2578,6 +2595,7 @@ test_negcache_CFLAGS = \
+     $(TALLOC_CFLAGS) \
+     $(DHASH_CFLAGS)
+ test_negcache_LDADD = \
++    $(LIBADD_DL) \
+     $(CMOCKA_LIBS) \
+     $(SSSD_LIBS) \
+     $(SYSTEMD_DAEMON_LIBS) \
+@@ -2922,6 +2940,7 @@ ifp_tests_SOURCES = \
+ ifp_tests_CFLAGS = \
+     $(AM_CFLAGS)
+ ifp_tests_LDADD = \
++    $(LIBADD_DL) \
+     $(CMOCKA_LIBS) \
+     $(SSSD_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS) \
+@@ -3178,6 +3197,7 @@ responder_cache_req_tests_LDFLAGS = \
+     -Wl,-wrap,sss_dp_get_account_send \
+     $(NULL)
+ responder_cache_req_tests_LDADD = \
++    $(LIBADD_DL) \
+     $(CMOCKA_LIBS) \
+     $(SSSD_LIBS) \
+     $(SSSD_INTERNAL_LTLIBS) \
+diff --git a/src/responder/common/negcache.c b/src/responder/common/negcache.c
+index f9034d164..d6f72d816 100644
+--- a/src/responder/common/negcache.c
++++ b/src/responder/common/negcache.c
+@@ -19,14 +19,16 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
++#include <fcntl.h>
++#include <time.h>
++#include "tdb.h"
+ #include "util/util.h"
++#include "util/nss_dl_load.h"
+ #include "confdb/confdb.h"
+ #include "responder/common/negcache_files.h"
+ #include "responder/common/responder.h"
+ #include "responder/common/negcache.h"
+-#include <fcntl.h>
+-#include <time.h>
+-#include "tdb.h"
++
+ 
+ #define NC_ENTRY_PREFIX "NCE/"
+ #define NC_USER_PREFIX NC_ENTRY_PREFIX"USER"
+@@ -44,6 +46,7 @@ struct sss_nc_ctx {
+     struct tdb_context *tdb;
+     uint32_t timeout;
+     uint32_t local_timeout;
++    struct sss_nss_ops ops;
+ };
+ 
+ typedef int (*ncache_set_byname_fn_t)(struct sss_nc_ctx *, bool,
+@@ -63,14 +66,49 @@ static int string_to_tdb_data(char *str, TDB_DATA *ret)
+     return EOK;
+ }
+ 
++static errno_t ncache_load_nss_symbols(struct sss_nss_ops *ops)
++{
++    errno_t ret;
++    size_t i;
++
++    ret = sss_load_nss_symbols(ops, "files");
++    if (ret != EOK) {
++        return ret;
++    }
++
++    void *mandatory_syms[] = {
++        (void*)ops->getpwnam_r,
++        (void*)ops->getpwuid_r,
++        (void*)ops->getgrnam_r,
++        (void*)ops->getgrgid_r
++    };
++    for (i = 0; i < sizeof(mandatory_syms)/sizeof(mandatory_syms[0]); ++i) {
++        if (!mandatory_syms[i]) {
++            DEBUG(SSSDBG_CRIT_FAILURE, "The 'files' library does not provide mandatory function");
++            return ELIBBAD;
++        }
++    }
++
++    return EOK;
++}
++
+ int sss_ncache_init(TALLOC_CTX *memctx, uint32_t timeout,
+                     uint32_t local_timeout, struct sss_nc_ctx **_ctx)
+ {
++    errno_t ret;
+     struct sss_nc_ctx *ctx;
+ 
+     ctx = talloc_zero(memctx, struct sss_nc_ctx);
+     if (!ctx) return ENOMEM;
+ 
++    ret = ncache_load_nss_symbols(&ctx->ops);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_FATAL_FAILURE, "Unable to load NSS symbols [%d]: %s\n",
++              ret, sss_strerror(ret));
++        talloc_free(ctx);
++        return ret;
++    }
++
+     errno = 0;
+     /* open a memory only tdb with default hash size */
+     ctx->tdb = tdb_open("memcache", 0, TDB_INTERNAL, O_RDWR|O_CREAT, 0);
+@@ -488,7 +526,7 @@ static int sss_ncache_set_user_int(struct sss_nc_ctx *ctx, bool permanent,
+     if (!str) return ENOMEM;
+ 
+     if ((!permanent) && (ctx->local_timeout > 0)) {
+-        use_local_negative = is_user_local_by_name(name);
++        use_local_negative = is_user_local_by_name(&ctx->ops, name);
+     }
+     ret = sss_ncache_set_str(ctx, str, permanent, use_local_negative);
+ 
+@@ -509,7 +547,7 @@ static int sss_ncache_set_group_int(struct sss_nc_ctx *ctx, bool permanent,
+     if (!str) return ENOMEM;
+ 
+     if ((!permanent) && (ctx->local_timeout > 0)) {
+-        use_local_negative = is_group_local_by_name(name);
++        use_local_negative = is_group_local_by_name(&ctx->ops, name);
+     }
+     ret = sss_ncache_set_str(ctx, str, permanent, use_local_negative);
+ 
+@@ -606,7 +644,7 @@ int sss_ncache_set_uid(struct sss_nc_ctx *ctx, bool permanent,
+     if (!str) return ENOMEM;
+ 
+     if ((!permanent) && (ctx->local_timeout > 0)) {
+-        use_local_negative = is_user_local_by_uid(uid);
++        use_local_negative = is_user_local_by_uid(&ctx->ops, uid);
+     }
+     ret = sss_ncache_set_str(ctx, str, permanent, use_local_negative);
+ 
+@@ -630,7 +668,7 @@ int sss_ncache_set_gid(struct sss_nc_ctx *ctx, bool permanent,
+     if (!str) return ENOMEM;
+ 
+     if ((!permanent) && (ctx->local_timeout > 0)) {
+-        use_local_negative = is_group_local_by_gid(gid);
++        use_local_negative = is_group_local_by_gid(&ctx->ops, gid);
+     }
+     ret = sss_ncache_set_str(ctx, str, permanent, use_local_negative);
+ 
+diff --git a/src/responder/common/negcache_files.c b/src/responder/common/negcache_files.c
+index 4256186d9..85a7065a4 100644
+--- a/src/responder/common/negcache_files.c
++++ b/src/responder/common/negcache_files.c
+@@ -19,94 +19,90 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
+-#include <sys/types.h>
+-#include <pwd.h>
+-#include <grp.h>
+ #include "util/util.h"
++#include "util/nss_dl_load.h"
+ #include "responder/common/negcache_files.h"
+ 
+ #define BUFFER_SIZE 16384
+ 
+-bool is_user_local_by_name(const char *name)
++bool is_user_local_by_name(const struct sss_nss_ops *ops, const char *name)
+ {
+     struct passwd pwd = { 0 };
+-    struct passwd *pwd_result;
++    int errnop;
+     char buffer[BUFFER_SIZE];
+-    bool is_local = false;
+-    int ret;
++    enum nss_status ret;
+     char *shortname = NULL;
++    int parse_ret;
+ 
+-    ret = sss_parse_internal_fqname(NULL, name, &shortname, NULL);
+-    if (ret != EOK) {
++    parse_ret = sss_parse_internal_fqname(NULL, name, &shortname, NULL);
++    if (parse_ret != EOK) {
+         return false;
+     }
+ 
+-    ret = getpwnam_r(shortname, &pwd, buffer, BUFFER_SIZE, &pwd_result);
++    ret = ops->getpwnam_r(shortname, &pwd, buffer, BUFFER_SIZE, &errnop);
+     talloc_free(shortname);
+-    if (ret == EOK && pwd_result != NULL) {
++    if (ret == NSS_STATUS_SUCCESS) {
+         DEBUG(SSSDBG_TRACE_FUNC, "User %s is a local user\n", name);
+-        is_local = true;
++        return true;
+     }
+ 
+-    return is_local;
++    return false;
+ }
+ 
+-bool is_user_local_by_uid(uid_t uid)
++bool is_user_local_by_uid(const struct sss_nss_ops *ops, uid_t uid)
+ {
+     struct passwd pwd = { 0 };
+-    struct passwd *pwd_result;
++    int errnop;
+     char buffer[BUFFER_SIZE];
+-    bool is_local = false;
+-    int ret;
++    enum nss_status ret;
+ 
+-    ret = getpwuid_r(uid, &pwd, buffer, BUFFER_SIZE, &pwd_result);
+-    if (ret == EOK && pwd_result != NULL) {
++    ret = ops->getpwuid_r(uid, &pwd, buffer, BUFFER_SIZE, &errnop);
++    if (ret == NSS_STATUS_SUCCESS) {
+         DEBUG(SSSDBG_TRACE_FUNC,
+               "User with UID %"SPRIuid" is a local user\n", uid);
+-        is_local = true;
++        return true;
+     }
+ 
+-    return is_local;
++    return false;
+ }
+ 
+-bool is_group_local_by_name(const char *name)
++bool is_group_local_by_name(const struct sss_nss_ops *ops, const char *name)
+ {
+     struct group grp = { 0 };
+-    struct group *grp_result;
++    int errnop;
+     char buffer[BUFFER_SIZE];
+-    bool is_local = false;
+-    int ret;
++    enum nss_status ret;
+     char *shortname = NULL;
++    int parse_ret;
+ 
+-    ret = sss_parse_internal_fqname(NULL, name, &shortname, NULL);
+-    if (ret != EOK) {
++    parse_ret = sss_parse_internal_fqname(NULL, name, &shortname, NULL);
++    if (parse_ret != EOK) {
+         return false;
+     }
+ 
+-    ret = getgrnam_r(shortname, &grp, buffer, BUFFER_SIZE, &grp_result);
++    ret = ops->getgrnam_r(shortname, &grp, buffer, BUFFER_SIZE, &errnop);
+     talloc_free(shortname);
+-    if (ret == EOK && grp_result != NULL) {
++    if (ret == NSS_STATUS_SUCCESS) {
+         DEBUG(SSSDBG_TRACE_FUNC, "Group %s is a local group\n", name);
+-        is_local = true;
++        return true;
+     }
+ 
+-    return is_local;
++    return false;
+ }
+ 
+-bool is_group_local_by_gid(uid_t gid)
++bool is_group_local_by_gid(const struct sss_nss_ops *ops, uid_t gid)
+ {
+     struct group grp = { 0 };
+-    struct group *grp_result;
++    int errnop;
+     char buffer[BUFFER_SIZE];
+-    bool is_local = false;
+-    int ret;
++    enum nss_status ret;
+ 
+-    ret = getgrgid_r(gid, &grp, buffer, BUFFER_SIZE, &grp_result);
+-    if (ret == EOK && grp_result != NULL) {
++    ret = ops->getgrgid_r(gid, &grp, buffer, BUFFER_SIZE, &errnop);
++    if (ret == NSS_STATUS_SUCCESS) {
+         DEBUG(SSSDBG_TRACE_FUNC,
+               "Group with GID %"SPRIgid" is a local group\n", gid);
+-        is_local = true;
++        return true;
+     }
+ 
+-    return is_local;
++    return false;
+ }
+diff --git a/src/responder/common/negcache_files.h b/src/responder/common/negcache_files.h
+index 01d9f0828..a3e18deb0 100644
+--- a/src/responder/common/negcache_files.h
++++ b/src/responder/common/negcache_files.h
+@@ -22,10 +22,14 @@
+ #ifndef _NEGCACHE_FILES_H_
+ #define _NEGCACHE_FILES_H_
+ 
+-bool is_user_local_by_name(const char *name);
+-bool is_user_local_by_uid(uid_t uid);
++#include <stdbool.h>
+ 
+-bool is_group_local_by_name(const char *name);
+-bool is_group_local_by_gid(uid_t gid);
++struct sss_nss_ops;
++
++bool is_user_local_by_name(const struct sss_nss_ops *ops, const char *name);
++bool is_user_local_by_uid(const struct sss_nss_ops *ops, uid_t uid);
++
++bool is_group_local_by_name(const struct sss_nss_ops *ops, const char *name);
++bool is_group_local_by_gid(const struct sss_nss_ops *ops, uid_t gid);
+ 
+ #endif /* _NEGCACHE_FILES_H_ */
+diff --git a/src/tests/cwrap/Makefile.am b/src/tests/cwrap/Makefile.am
+index a559abe9e..bfc493395 100644
+--- a/src/tests/cwrap/Makefile.am
++++ b/src/tests/cwrap/Makefile.am
+@@ -75,6 +75,7 @@ SSSD_RESPONDER_IFACE_OBJ = \
+ 
+ SSSD_RESPONDER_OBJ = \
+     ../../../src/responder/common/negcache_files.c \
++    ../../../src/util/nss_dl_load.c \
+     ../../../src/responder/common/negcache.c \
+     ../../../src/responder/common/responder_cmd.c \
+     ../../../src/responder/common/responder_common.c \
+@@ -175,6 +176,7 @@ responder_common_tests_SOURCES =\
+     ../../../src/responder/common/iface/responder_ncache.c \
+     ../../../src/responder/common/iface/responder_iface_generated.c \
+     ../../../src/responder/common/negcache_files.c \
++    ../../../src/util/nss_dl_load.c \
+     ../../../src/responder/common/negcache.c \
+     ../../../src/responder/common/data_provider/rdp_message.c \
+     ../../../src/responder/common/data_provider/rdp_client.c \
+@@ -189,6 +191,7 @@ responder_common_tests_CFLAGS = \
+     $(AM_CFLAGS) \
+     $(NULL)
+ responder_common_tests_LDADD = \
++    $(LIBADD_DL) \
+     $(CMOCKA_LIBS) \
+     $(SSSD_LIBS) \
+     $(SELINUX_LIBS) \
+@@ -207,6 +210,7 @@ negcache_tests_CFLAGS = \
+     -DBASE_FILE_STEM=\"$(*F)\" \
+     $(NULL)
+ negcache_tests_LDADD = \
++    $(LIBADD_DL) \
+     $(CMOCKA_LIBS) \
+     $(SSSD_LIBS) \
+     $(SELINUX_LIBS) \
+diff --git a/src/tests/cwrap/test_negcache.c b/src/tests/cwrap/test_negcache.c
+index c4f601b34..690e797e2 100644
+--- a/src/tests/cwrap/test_negcache.c
++++ b/src/tests/cwrap/test_negcache.c
+@@ -18,6 +18,10 @@
+     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
++#include <stdio.h>
++#include <sys/types.h>
++#include <pwd.h>
++
+ #include <stdarg.h>
+ #include <stddef.h>
+ #include <setjmp.h>
+@@ -35,38 +39,40 @@
+ #define TEST_CONF_DB "test_negcache_confdb.ldb"
+ #define TEST_DOM_NAME "test_domain.test"
+ 
+-#define TEST_LOCAL_USER_NAME_1 "foobar"
+-#define TEST_LOCAL_USER_NAME_2 "sssd"
+-
+-#define TEST_LOCAL_USER_UID_1 10001
+-#define TEST_LOCAL_USER_UID_2 123
+-
+-#define TEST_LOCAL_GROUP_NAME_1 "foogroup"
+-#define TEST_LOCAL_GROUP_NAME_2 "sssd"
+-
+-#define TEST_LOCAL_GID_1 10001
+-#define TEST_LOCAL_GID_2 123
+-
+-struct test_user {
++struct user_descriptor_t {
+     const char *name;
+     uid_t uid;
++};
++
++struct group_descriptor_t {
++    const char *name;
+     gid_t gid;
+-} users[] = { { "test_user1", 1001, 50001 },
+-              { "test_user2", 1002, 50002 } };
++};
+ 
+-static void create_users(TALLOC_CTX *mem_ctx,
+-                         struct sss_domain_info *domain)
++struct ncache_test_ctx {
++    struct sss_test_ctx *tctx;
++    struct sss_nc_ctx *ncache;
++    struct user_descriptor_t local_users[2];
++    struct user_descriptor_t non_local_users[2];
++    struct group_descriptor_t local_groups[2];
++    struct group_descriptor_t non_local_groups[2];
++};
++
++static void create_users(struct ncache_test_ctx *test_ctx)
+ {
+     errno_t ret;
+     char *fqname;
++    struct sss_domain_info *domain = test_ctx->tctx->dom;
++    const struct user_descriptor_t *users = test_ctx->non_local_users;
++    const struct group_descriptor_t *groups = test_ctx->non_local_groups;
+ 
+     for (int i = 0; i < 2; i++) {
+-        fqname = sss_create_internal_fqname(mem_ctx,
++        fqname = sss_create_internal_fqname(test_ctx,
+                                             users[i].name,
+                                             domain->name);
+         assert_non_null(fqname);
+ 
+-        ret = sysdb_add_user(domain, users[i].name, users[i].uid, users[i].gid,
++        ret = sysdb_add_user(domain, users[i].name, users[i].uid, groups[i].gid,
+                              fqname, NULL, "/bin/bash", domain->name,
+                              NULL, 30, time(NULL));
+         talloc_free(fqname);
+@@ -74,25 +80,15 @@ static void create_users(TALLOC_CTX *mem_ctx,
+     }
+ }
+ 
+-struct test_group {
+-    const char *name;
+-    gid_t gid;
+-} groups[] = { { "test_group1", 50001 },
+-               { "test_group2", 50002 } };
+-
+-struct ncache_test_ctx {
+-    struct sss_test_ctx *tctx;
+-    struct sss_nc_ctx *ncache;
+-};
+-
+-static void create_groups(TALLOC_CTX *mem_ctx,
+-                          struct sss_domain_info *domain)
++static void create_groups(struct ncache_test_ctx *test_ctx)
+ {
+     errno_t ret;
+     char *fqname;
++    struct sss_domain_info *domain = test_ctx->tctx->dom;
++    const struct group_descriptor_t *groups = test_ctx->non_local_groups;
+ 
+     for (int i = 0; i < 2; i++) {
+-        fqname = sss_create_internal_fqname(mem_ctx,
++        fqname = sss_create_internal_fqname(test_ctx,
+                                             groups[i].name,
+                                             domain->name);
+         assert_non_null(fqname);
+@@ -116,6 +112,114 @@ struct cli_protocol_version *register_cli_protocol_version(void)
+     return responder_test_cli_protocol_version;
+ }
+ 
++static void find_local_users(struct ncache_test_ctx *test_ctx)
++{
++    int i;
++    FILE *passwd_file;
++    const struct passwd *pwd;
++
++    passwd_file = fopen("/etc/passwd", "r");
++    assert_non_null(passwd_file);
++
++    for (i = 0; i < 2; /*no-op*/) {
++        pwd = fgetpwent(passwd_file);
++        assert_non_null(pwd);
++        if (pwd->pw_uid == 0) {
++            /* skip root */
++            continue;
++        }
++        test_ctx->local_users[i].uid = pwd->pw_uid;
++        test_ctx->local_users[i].name = talloc_strdup(test_ctx, pwd->pw_name);
++        assert_non_null(test_ctx->local_users[i].name);
++        ++i;
++    }
++
++    fclose(passwd_file);
++}
++
++static void find_local_groups(struct ncache_test_ctx *test_ctx)
++{
++    int i;
++    FILE *group_file;
++    const struct group *grp;
++
++    group_file = fopen("/etc/group", "r");
++    assert_non_null(group_file);
++
++    for (i = 0; i < 2; /* no-op */) {
++        grp = fgetgrent(group_file);
++        assert_non_null(grp);
++        if (grp->gr_gid == 0) {
++            /* skip root */
++            continue;
++        }
++        test_ctx->local_groups[i].gid = grp->gr_gid;
++        test_ctx->local_groups[i].name = talloc_strdup(test_ctx, grp->gr_name);
++        assert_non_null(test_ctx->local_groups[i].name);
++        ++i;
++    }
++
++    fclose(group_file);
++}
++
++static void find_non_local_users(struct ncache_test_ctx *test_ctx)
++{
++    int i;
++    int k;
++    uid_t uid;
++    char *name;
++
++    for (i = 0, k = 1; (k < 100) && (i < 2); ++k) {
++        uid = 65534-k;
++        if (getpwuid(uid)) {
++            continue;
++        }
++        test_ctx->non_local_users[i].uid = uid;
++        ++i;
++    }
++    assert_int_equal(i, 2);
++
++    for (i = 0, k = 0; (k < 100) && (i < 2); ++k) {
++        name = talloc_asprintf(test_ctx, "nctestuser%d", k);
++        if (getpwnam(name)) {
++            talloc_free(name);
++            continue;
++        }
++        test_ctx->non_local_users[i].name = name;
++        ++i;
++    }
++    assert_int_equal(i, 2);
++}
++
++static void find_non_local_groups(struct ncache_test_ctx *test_ctx)
++{
++    int i = 0;
++    int k;
++    gid_t gid;
++    char *name;
++
++    for (i = 0, k = 1; (k < 100) && (i < 2); ++k) {
++        gid = 65534-k;
++        if (getgrgid(gid)) {
++            continue;
++        }
++        test_ctx->non_local_groups[i].gid = gid;
++        ++i;
++    }
++    assert_int_equal(i, 2);
++
++    for (i = 0, k = 0; (k < 100) && (i < 2); ++k) {
++        name = talloc_asprintf(test_ctx, "nctestgroup%d", k);
++        if (getgrnam(name)) {
++            talloc_free(name);
++            continue;
++        }
++        test_ctx->non_local_groups[i].name = name;
++        ++i;
++    }
++    assert_int_equal(i, 2);
++}
++
+ static int test_ncache_setup(void **state)
+ {
+     struct ncache_test_ctx *test_ctx;
+@@ -125,14 +229,19 @@ static int test_ncache_setup(void **state)
+     test_ctx = talloc_zero(global_talloc_context, struct ncache_test_ctx);
+     assert_non_null(test_ctx);
+ 
++    find_local_users(test_ctx);
++    find_local_groups(test_ctx);
++    find_non_local_users(test_ctx);
++    find_non_local_groups(test_ctx);
++
+     test_dom_suite_setup(TESTS_PATH);
+ 
+     test_ctx->tctx = create_dom_test_ctx(test_ctx, TESTS_PATH, TEST_CONF_DB,
+                                          TEST_DOM_NAME, "ipa", NULL);
+     assert_non_null(test_ctx->tctx);
+ 
+-    create_groups(test_ctx, test_ctx->tctx->dom);
+-    create_users(test_ctx, test_ctx->tctx->dom);
++    create_groups(test_ctx);
++    create_users(test_ctx);
+ 
+     check_leaks_push(test_ctx);
+ 
+@@ -213,11 +322,11 @@ static void set_users(struct ncache_test_ctx *test_ctx)
+     int ret;
+ 
+     ret = set_user_in_ncache(test_ctx->ncache, false, test_ctx->tctx->dom,
+-                              users[0].name);
++                             test_ctx->non_local_users[0].name);
+     assert_int_equal(ret, EOK);
+ 
+     ret = set_user_in_ncache(test_ctx->ncache, false, test_ctx->tctx->dom,
+-                             TEST_LOCAL_USER_NAME_1);
++                             test_ctx->local_users[0].name);
+     assert_int_equal(ret, EOK);
+ }
+ 
+@@ -227,19 +336,19 @@ static void check_users(struct ncache_test_ctx *test_ctx,
+     int ret;
+ 
+     ret = check_user_in_ncache(test_ctx->ncache, test_ctx->tctx->dom,
+-                                users[0].name);
++                                test_ctx->non_local_users[0].name);
+     assert_int_equal(ret, case_a);
+ 
+     ret = check_user_in_ncache(test_ctx->ncache, test_ctx->tctx->dom,
+-                                users[1].name);
++                                test_ctx->non_local_users[1].name);
+     assert_int_equal(ret, case_b);
+ 
+     ret = check_user_in_ncache(test_ctx->ncache, test_ctx->tctx->dom,
+-                                TEST_LOCAL_USER_NAME_1);
++                                test_ctx->local_users[0].name);
+     assert_int_equal(ret, case_c);
+ 
+     ret = check_user_in_ncache(test_ctx->ncache, test_ctx->tctx->dom,
+-                                TEST_LOCAL_USER_NAME_2);
++                                test_ctx->local_users[1].name);
+     assert_int_equal(ret, case_d);
+ }
+ 
+@@ -324,11 +433,11 @@ static void set_uids(struct ncache_test_ctx *test_ctx)
+     int ret;
+ 
+     ret = sss_ncache_set_uid(test_ctx->ncache, false, test_ctx->tctx->dom,
+-                             users[0].uid);
++                             test_ctx->non_local_users[0].uid);
+     assert_int_equal(ret, EOK);
+ 
+     ret = sss_ncache_set_uid(test_ctx->ncache, false, test_ctx->tctx->dom,
+-                             TEST_LOCAL_USER_UID_1);
++                             test_ctx->local_users[0].uid);
+     assert_int_equal(ret, EOK);
+ }
+ 
+@@ -338,19 +447,19 @@ static void check_uids(struct ncache_test_ctx *test_ctx,
+     int ret;
+ 
+     ret = sss_ncache_check_uid(test_ctx->ncache, test_ctx->tctx->dom,
+-                               users[0].uid);
++                               test_ctx->non_local_users[0].uid);
+     assert_int_equal(ret, case_a);
+ 
+     ret = sss_ncache_check_uid(test_ctx->ncache, test_ctx->tctx->dom,
+-                               users[1].uid);
++                               test_ctx->non_local_users[1].uid);
+     assert_int_equal(ret, case_b);
+ 
+     ret = sss_ncache_check_uid(test_ctx->ncache, test_ctx->tctx->dom,
+-                               TEST_LOCAL_USER_UID_1);
++                               test_ctx->local_users[0].uid);
+     assert_int_equal(ret, case_c);
+ 
+     ret = sss_ncache_check_uid(test_ctx->ncache, test_ctx->tctx->dom,
+-                               TEST_LOCAL_USER_UID_2);
++                               test_ctx->local_users[1].uid);
+     assert_int_equal(ret, case_d);
+ }
+ 
+@@ -435,11 +544,11 @@ static void set_groups(struct ncache_test_ctx *test_ctx)
+     int ret;
+ 
+     ret = set_group_in_ncache(test_ctx->ncache, false, test_ctx->tctx->dom,
+-                              groups[0].name);
++                              test_ctx->non_local_groups[0].name);
+     assert_int_equal(ret, EOK);
+ 
+     ret = set_group_in_ncache(test_ctx->ncache, false, test_ctx->tctx->dom,
+-                              TEST_LOCAL_GROUP_NAME_1);
++                              test_ctx->local_groups[0].name);
+     assert_int_equal(ret, EOK);
+ }
+ 
+@@ -449,19 +558,19 @@ static void check_groups(struct ncache_test_ctx *test_ctx,
+     int ret;
+ 
+     ret = check_group_in_ncache(test_ctx->ncache, test_ctx->tctx->dom,
+-                                groups[0].name);
++                                test_ctx->non_local_groups[0].name);
+     assert_int_equal(ret, case_a);
+ 
+     ret = check_group_in_ncache(test_ctx->ncache, test_ctx->tctx->dom,
+-                                groups[1].name);
++                                test_ctx->non_local_groups[1].name);
+     assert_int_equal(ret, case_b);
+ 
+     ret = check_group_in_ncache(test_ctx->ncache, test_ctx->tctx->dom,
+-                                TEST_LOCAL_GROUP_NAME_1);
++                                test_ctx->local_groups[0].name);
+     assert_int_equal(ret, case_c);
+ 
+     ret = check_group_in_ncache(test_ctx->ncache, test_ctx->tctx->dom,
+-                                TEST_LOCAL_GROUP_NAME_2);
++                                test_ctx->local_groups[1].name);
+     assert_int_equal(ret, case_d);
+ }
+ 
+@@ -546,11 +655,11 @@ static void set_gids(struct ncache_test_ctx *test_ctx)
+     int ret;
+ 
+     ret = sss_ncache_set_gid(test_ctx->ncache, false, test_ctx->tctx->dom,
+-                             users[0].gid);
++                             test_ctx->non_local_groups[0].gid);
+     assert_int_equal(ret, EOK);
+ 
+     ret = sss_ncache_set_gid(test_ctx->ncache, false, test_ctx->tctx->dom,
+-                             TEST_LOCAL_GID_1);
++                             test_ctx->local_groups[0].gid);
+     assert_int_equal(ret, EOK);
+ }
+ 
+@@ -560,19 +669,19 @@ static void check_gids(struct ncache_test_ctx *test_ctx,
+     int ret;
+ 
+     ret = sss_ncache_check_gid(test_ctx->ncache, test_ctx->tctx->dom,
+-                               users[0].gid);
++                               test_ctx->non_local_groups[0].gid);
+     assert_int_equal(ret, case_a);
+ 
+     ret = sss_ncache_check_gid(test_ctx->ncache, test_ctx->tctx->dom,
+-                               users[1].gid);
++                               test_ctx->non_local_groups[1].gid);
+     assert_int_equal(ret, case_b);
+ 
+     ret = sss_ncache_check_gid(test_ctx->ncache, test_ctx->tctx->dom,
+-                               TEST_LOCAL_GID_1);
++                               test_ctx->local_groups[0].gid);
+     assert_int_equal(ret, case_c);
+ 
+     ret = sss_ncache_check_gid(test_ctx->ncache, test_ctx->tctx->dom,
+-                               TEST_LOCAL_GID_2);
++                               test_ctx->local_groups[1].gid);
+     assert_int_equal(ret, case_d);
+ }
+ 
+diff --git a/src/tests/intg/test_ldap.py b/src/tests/intg/test_ldap.py
+index 63f6ea4ed..787255f92 100644
+--- a/src/tests/intg/test_ldap.py
++++ b/src/tests/intg/test_ldap.py
+@@ -43,15 +43,6 @@ from files_ops import passwd_ops_setup, group_ops_setup
+ LDAP_BASE_DN = "dc=example,dc=com"
+ INTERACTIVE_TIMEOUT = 4
+ 
+-PASSWD_USER = dict(name='passwduser', passwd='x', uid=100000, gid=2000,
+-                   gecos='User for tests',
+-                   dir='/home/passwduser',
+-                   shell='/bin/bash')
+-
+-PASSWD_GROUP = dict(name='passwdgroup',
+-                    gid=200000,
+-                    mem=['passwduser'])
+-
+ 
+ @pytest.fixture(scope="module")
+ def ds_inst(request):
+@@ -1860,14 +1851,32 @@ def test_rename_incomplete_group_rdn_changed(ldap_conn, rename_setup_cleanup):
+ 
+ 
+ @pytest.fixture
+-def user_and_group_rfc2307_lcl(passwd_ops_setup, group_ops_setup,
+-                               user_and_group_rfc2307):
+-    pwd_ops = passwd_ops_setup
+-    pwd_ops.useradd(**PASSWD_USER)
+-    grp_ops = group_ops_setup
+-    grp_ops.groupadd(**PASSWD_GROUP)
++def find_local_user_and_group():
++    f = open("/etc/passwd")
++    for line in f:
++        passwd_user = line.split(':')
++        passwd_user[2] = int(passwd_user[2])
++        if passwd_user[2] != 0:
++            break
++    f.close()
++    assert passwd_user[2] != 0
++
++    f = open("/etc/group")
++    for line in f:
++        passwd_group = line.split(':')
++        passwd_group[2] = int(passwd_group[2])
++        if passwd_group[2] != 0:
++            break
++    f.close()
++    assert passwd_group[2] != 0
++
++    return (passwd_user, passwd_group)
+ 
+-    return user_and_group_rfc2307
++
++@pytest.fixture
++def user_and_group_rfc2307_lcl(find_local_user_and_group,
++                               user_and_group_rfc2307):
++    return find_local_user_and_group
+ 
+ 
+ def test_local_negative_timeout_enabled_by_default(ldap_conn,
+@@ -1879,64 +1888,53 @@ def test_local_negative_timeout_enabled_by_default(ldap_conn,
+     # sanity check - try resolving an LDAP user
+     ent.assert_passwd_by_name("user", dict(name="user", uid=1001, gid=2000))
+ 
++    passwd_user, passwd_group = user_and_group_rfc2307_lcl
++
+     # resolve a user who is not in LDAP, but exists locally
+-    res, _ = call_sssd_getpwnam("passwduser")
++    res, _ = call_sssd_getpwnam(passwd_user[0])
+     assert res == NssReturnCode.NOTFOUND
+-    res = pwd.getpwnam("passwduser")
+-    assert res is not None
+     # Do the same by UID
+-    res, _ = call_sssd_getpwuid(100000)
++    res, _ = call_sssd_getpwuid(passwd_user[2])
+     assert res == NssReturnCode.NOTFOUND
+-    res = pwd.getpwuid(100000)
+-    assert res is not None
+ 
+     # Do the same for a group both by name and by ID
+-    res, _ = call_sssd_getgrnam("passwdgroup")
++    res, _ = call_sssd_getgrnam(passwd_group[0])
+     assert res == NssReturnCode.NOTFOUND
+-    res = grp.getgrnam("passwdgroup")
+-    assert res is not None
+-    res, _ = call_sssd_getgrgid(200000)
++    res, _ = call_sssd_getgrgid(passwd_group[2])
+     assert res == NssReturnCode.NOTFOUND
+-    res = grp.getgrgid(200000)
+-    assert res is not None
+ 
+     # add the user and the group to LDAP
+     ent_list = ldap_ent.List(ldap_conn.ds_inst.base_dn)
+-    ent_list.add_user("passwduser", 100000, 2000)
+-    ent_list.add_group("passwdgroup", 200000)
++    ent_list.add_user(passwd_user[0], passwd_user[2], 2000)
++    ent_list.add_group(passwd_group[0], passwd_group[2])
+     create_ldap_entries(ldap_conn, ent_list)
+ 
+-    # Make sure the negative cache expired
++    # Make sure the negative cache would expire if global timeout was used
+     time.sleep(2)
+ 
+     # The user is now negatively cached and can't be resolved by either
+     # name or UID
+-    res, _ = call_sssd_getpwnam("passwduser")
++    res, _ = call_sssd_getpwnam(passwd_group[0])
+     assert res == NssReturnCode.NOTFOUND
+-    res, _ = call_sssd_getpwuid(100000)
++    res, _ = call_sssd_getpwuid(passwd_group[2])
+     assert res == NssReturnCode.NOTFOUND
+ 
+-    res, _ = call_sssd_getgrnam("passwdgroup")
++    res, _ = call_sssd_getgrnam(passwd_group[0])
+     assert res == NssReturnCode.NOTFOUND
+-    res, _ = call_sssd_getgrgid(200000)
++    res, _ = call_sssd_getgrgid(passwd_group[2])
+     assert res == NssReturnCode.NOTFOUND
+ 
+     cleanup_ldap_entries(ldap_conn, ent_list)
+ 
+ 
+ @pytest.fixture
+-def usr_and_grp_rfc2307_no_local_ncache(request, passwd_ops_setup,
+-                                        group_ops_setup, ldap_conn):
++def usr_and_grp_rfc2307_no_local_ncache(request, find_local_user_and_group,
++                                        ldap_conn):
+     """
+     Create an RFC2307 directory fixture with interactive SSSD conf,
+     one user and one group but with the local negative timeout
+     disabled
+     """
+-    pwd_ops = passwd_ops_setup
+-    pwd_ops.useradd(**PASSWD_USER)
+-    grp_ops = group_ops_setup
+-    grp_ops.groupadd(**PASSWD_GROUP)
+-
+     ent_list = ldap_ent.List(ldap_conn.ds_inst.base_dn)
+     ent_list.add_user("user", 1001, 2000)
+     ent_list.add_group("group", 2001)
+@@ -1948,7 +1946,7 @@ def usr_and_grp_rfc2307_no_local_ncache(request, passwd_ops_setup,
+         """)
+     create_conf_fixture(request, conf)
+     create_sssd_fixture(request)
+-    return None
++    return find_local_user_and_group
+ 
+ 
+ def test_local_negative_timeout_disabled(ldap_conn,
+@@ -1960,46 +1958,40 @@ def test_local_negative_timeout_disabled(ldap_conn,
+     # sanity check - try resolving an LDAP user
+     ent.assert_passwd_by_name("user", dict(name="user", uid=1001, gid=2000))
+ 
++    passwd_user, passwd_group = usr_and_grp_rfc2307_no_local_ncache
++
+     # resolve a user who is not in LDAP, but exists locally
+-    res, _ = call_sssd_getpwnam("passwduser")
++    res, _ = call_sssd_getpwnam(passwd_user[0])
+     assert res == NssReturnCode.NOTFOUND
+-    res = pwd.getpwnam("passwduser")
+-    assert res is not None
+     # Do the same by UID
+-    res, _ = call_sssd_getpwuid(100000)
++    res, _ = call_sssd_getpwuid(passwd_user[2])
+     assert res == NssReturnCode.NOTFOUND
+-    res = pwd.getpwuid(100000)
+-    assert res is not None
+ 
+     # Do the same for a group both by name and by ID
+-    res, _ = call_sssd_getgrnam("passwdgroup")
++    res, _ = call_sssd_getgrnam(passwd_group[0])
+     assert res == NssReturnCode.NOTFOUND
+-    res = grp.getgrnam("passwdgroup")
+-    assert res is not None
+-    res, _ = call_sssd_getgrgid(200000)
++    res, _ = call_sssd_getgrgid(passwd_group[2])
+     assert res == NssReturnCode.NOTFOUND
+-    res = grp.getgrgid(200000)
+-    assert res is not None
+ 
+     # add the user and the group to LDAP
+     ent_list = ldap_ent.List(ldap_conn.ds_inst.base_dn)
+-    ent_list.add_user("passwduser", 100000, 2000)
+-    ent_list.add_group("passwdgroup", 200000)
++    ent_list.add_user(passwd_user[0], passwd_user[2], 2000)
++    ent_list.add_group(passwd_group[0], passwd_group[2])
+     create_ldap_entries(ldap_conn, ent_list)
+ 
+     # Make sure the negative cache expired
+     time.sleep(2)
+ 
+     # The user can now be resolved
+-    res, _ = call_sssd_getpwnam("passwduser")
++    res, _ = call_sssd_getpwnam(passwd_user[0])
+     assert res == NssReturnCode.SUCCESS
+     # Do the same by UID
+-    res, _ = call_sssd_getpwuid(100000)
++    res, _ = call_sssd_getpwuid(passwd_user[2])
+     assert res == NssReturnCode.SUCCESS
+ 
+-    res, _ = call_sssd_getgrnam("passwdgroup")
++    res, _ = call_sssd_getgrnam(passwd_group[0])
+     assert res == NssReturnCode.SUCCESS
+-    res, _ = call_sssd_getgrgid(200000)
++    res, _ = call_sssd_getgrgid(passwd_group[2])
+     assert res == NssReturnCode.SUCCESS
+ 
+     cleanup_ldap_entries(ldap_conn, ent_list)
+-- 
+2.19.1
+

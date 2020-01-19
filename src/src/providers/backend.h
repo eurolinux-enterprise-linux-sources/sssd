@@ -58,7 +58,7 @@ struct be_svc_data {
     const char *name;
     struct fo_service *fo_service;
 
-    struct fo_server *last_good_srv;
+    char *last_good_srv;
     time_t last_status_change;
     bool run_callbacks;
 
@@ -95,6 +95,7 @@ struct be_ctx {
     struct be_cb *online_cb_list;
     bool run_online_cb;
     struct be_cb *offline_cb_list;
+    bool run_offline_cb;
     struct be_cb *reconnect_cb_list;
     /* In contrast to online_cb_list which are only run if the backend is
      * offline the unconditional_online_cb_list should be run whenever the

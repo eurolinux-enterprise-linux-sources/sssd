@@ -75,6 +75,7 @@ struct err_string error_to_str[] = {
     { "LDAP search returned a referral" }, /* ERR_REFERRAL */
     { "Error setting SELinux user context" }, /* ERR_SELINUX_CONTEXT */
     { "SELinux is not managed by libsemanage" }, /* ERR_SELINUX_NOT_MANAGED */
+    { "SELinux user does not exist" }, /* ERR_SELINUX_USER_NOT_FOUND */
     { "Username format not allowed by re_expression" }, /* ERR_REGEX_NOMATCH */
     { "Time specification not supported" }, /* ERR_TIMESPEC_NOT_SUPPORTED */
     { "Invalid SSSD configuration detected" }, /* ERR_INVALID_CONFIG */
@@ -86,6 +87,7 @@ struct err_string error_to_str[] = {
     { "Retrieving keytab failed" }, /* ERR_IPA_GETKEYTAB_FAILED */
     { "Trusted forest root unknown" }, /* ERR_TRUST_FOREST_UNKNOWN */
     { "p11_child failed" }, /* ERR_P11_CHILD */
+    { "p11_child timeout" }, /* ERR_P11_CHILD_TIMEOUT */
     { "Address family not supported" }, /* ERR_ADDR_FAMILY_NOT_SUPPORTED */
     { "Message sender is the bus" }, /* ERR_SBUS_SENDER_BUS */
     { "Subdomain is inactive" }, /* ERR_SUBDOM_INACTIVE */

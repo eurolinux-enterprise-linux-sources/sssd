@@ -1,0 +1,297 @@
+From 6f6b3b1f4fcec79a1640a97fb3cd875f2cd8b83a Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Tue, 19 Mar 2019 11:01:10 +0100
+Subject: [PATCH] AD: Allow configuring auto_private_groups per subdomain or
+ with subdomain_inherit
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3965
+
+Previously, subdomains that used ID mapping always only used MPGs and
+POSIX subdomains always inherited the parent domain settings. This patch
+is a small RFE which allows to either set the auto_private_groups option
+directly per subdomain or set it for all subdomains using the
+subdomain_inherit option
+
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit 41c497b8b9e6efb9f2aa8e4cc869d465c3b954b3)
+---
+ src/man/sssd.conf.5.xml               |  38 +++++----
+ src/providers/ad/ad_subdomains.c      | 107 ++++++++++++++++++++++----
+ src/providers/ldap/sdap_async_users.c |   2 +-
+ src/util/domain_info_utils.c          |  14 +++-
+ src/util/util.h                       |   3 +
+ 5 files changed, 130 insertions(+), 34 deletions(-)
+
+diff --git a/src/man/sssd.conf.5.xml b/src/man/sssd.conf.5.xml
+index 41ba7b924..3d017f638 100644
+--- a/src/man/sssd.conf.5.xml
++++ b/src/man/sssd.conf.5.xml
+@@ -2995,6 +2995,13 @@ subdomain_inherit = ldap_purge_cache_timeout
+                                             Create user's private group unconditionally from user's UID number.
+                                             The GID number is ignored in this case.
+                                         </para>
++                                        <para>
++                                            NOTE: Because the GID number and the user private group
++                                            are inferred from the UID number, it is not supported
++                                            to have multiple entries with the same UID or GID number
++                                            with this option. In other words, enabling this option
++                                            enforces uniqueness across the ID space.
++                                        </para>
+                                     </listitem>
+                                 </varlistentry>
+                                 <varlistentry>
+@@ -3041,24 +3048,25 @@ subdomain_inherit = ldap_purge_cache_timeout
+                                 </varlistentry>
+                             </variablelist>
+                         </para>
+-			<para>
+-			    For POSIX subdomains, setting the option in the main
+-			    domain is inherited in the subdomain.
+-			</para>
+-			<para>
+-			    For ID-mapping subdomains, auto_private_groups is
+-			    already enabled for the subdomains and setting it to
+-			    false will not have any effect for the subdomain.
+-			</para>
+                         <para>
+-                            NOTE: Because the GID number and the user private group
+-                            are inferred from the UID number, it is not supported
+-                            to have multiple entries with the same UID or GID number
+-                            with this option. In other words, enabling this option
+-                            enforces uniqueness across the ID space.
++                            For subdomains, the default value is False for
++                            subdomains that use assigned POSIX IDs and True
++                            for subdomains that use automatic ID-mapping.
+                         </para>
+                         <para>
+-                            Default: False
++                            The value of auto_private_groups can either be set per subdomains
++                            in a subsection, for example:
++<programlisting>
++[domain/forest.domain/sub.domain]
++auto_private_groups = false
++</programlisting>
++                            or globally for all subdomains in the main domain section
++                            using the subdomain_inherit option:
++<programlisting>
++[domain/forest.domain]
++subdomain_inherit = auto_private_groups
++auto_private_groups = false
++</programlisting>
+                         </para>
+                     </listitem>
+                 </varlistentry>
+diff --git a/src/providers/ad/ad_subdomains.c b/src/providers/ad/ad_subdomains.c
+index 5b046773c..4fc4be094 100644
+--- a/src/providers/ad/ad_subdomains.c
++++ b/src/providers/ad/ad_subdomains.c
+@@ -436,8 +436,87 @@ static errno_t ad_subdom_enumerates(struct sss_domain_info *parent,
+     return EOK;
+ }
+ 
++static enum sss_domain_mpg_mode
++get_default_subdom_mpg_mode(struct sdap_idmap_ctx *idmap_ctx,
++                            struct sss_domain_info *parent,
++                            const char *subdom_name,
++                            char *subdom_sid_str)
++{
++    bool use_id_mapping;
++    bool inherit_option;
++    enum sss_domain_mpg_mode default_mpg_mode;
++
++    inherit_option = string_in_list(CONFDB_DOMAIN_AUTO_UPG,
++                                    parent->sd_inherit, false);
++    if (inherit_option) {
++        return get_domain_mpg_mode(parent);
++    }
++
++    use_id_mapping = sdap_idmap_domain_has_algorithmic_mapping(idmap_ctx,
++                                                               subdom_name,
++                                                               subdom_sid_str);
++    if (use_id_mapping == true) {
++        default_mpg_mode = MPG_ENABLED;
++    } else {
++        /* Domains that use the POSIX attributes set by the admin must
++         * inherit the MPG setting from the parent domain so that the
++         * auto_private_groups options works for trusted domains as well
++         */
++        default_mpg_mode = get_domain_mpg_mode(parent);
++    }
++
++    return default_mpg_mode;
++}
++
++static enum sss_domain_mpg_mode
++ad_subdom_mpg_mode(TALLOC_CTX *mem_ctx,
++                   struct confdb_ctx *cdb,
++                   struct sss_domain_info *parent,
++                   enum sss_domain_mpg_mode default_mpg_mode,
++                   const char *subdom_name)
++{
++    char *subdom_conf_path;
++    char *mpg_str_opt;
++    errno_t ret;
++    enum sss_domain_mpg_mode ret_mode;
++
++    subdom_conf_path = subdomain_create_conf_path_from_str(mem_ctx,
++                                                           parent->name,
++                                                           subdom_name);
++    if (subdom_conf_path == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE,
++              "subdom_conf_path failed, will use %s mode as fallback\n",
++              str_domain_mpg_mode(default_mpg_mode));
++        return default_mpg_mode;
++    }
++
++    ret = confdb_get_string(cdb, mem_ctx, subdom_conf_path,
++                            CONFDB_DOMAIN_AUTO_UPG,
++                            NULL,
++                            &mpg_str_opt);
++    talloc_free(subdom_conf_path);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE,
++              "condb_get_string failed, will use %s mode as fallback\n",
++              str_domain_mpg_mode(default_mpg_mode));
++        return default_mpg_mode;
++    }
++
++    if (mpg_str_opt == NULL) {
++        DEBUG(SSSDBG_CONF_SETTINGS,
++              "Subdomain MPG mode not set, using %s\n",
++              str_domain_mpg_mode(default_mpg_mode));
++        return default_mpg_mode;
++    }
++
++    ret_mode = str_to_domain_mpg_mode(mpg_str_opt);
++    talloc_free(mpg_str_opt);
++    return ret_mode;
++}
++
+ static errno_t
+-ad_subdom_store(struct sdap_idmap_ctx *idmap_ctx,
++ad_subdom_store(struct confdb_ctx *cdb,
++                struct sdap_idmap_ctx *idmap_ctx,
+                 struct sss_domain_info *domain,
+                 struct sysdb_attrs *subdom_attrs,
+                 bool enumerate)
+@@ -451,8 +530,8 @@ ad_subdom_store(struct sdap_idmap_ctx *idmap_ctx,
+     struct ldb_message_element *el;
+     char *sid_str = NULL;
+     uint32_t trust_type;
+-    bool use_id_mapping;
+     enum sss_domain_mpg_mode mpg_mode;
++    enum sss_domain_mpg_mode default_mpg_mode;
+ 
+     tmp_ctx = talloc_new(NULL);
+     if (tmp_ctx == NULL) {
+@@ -501,17 +580,13 @@ ad_subdom_store(struct sdap_idmap_ctx *idmap_ctx,
+         goto done;
+     }
+ 
+-    use_id_mapping = sdap_idmap_domain_has_algorithmic_mapping(idmap_ctx,
+-                                                               name, sid_str);
+-    if (use_id_mapping == true) {
+-        mpg_mode = MPG_ENABLED;
+-    } else {
+-        /* Domains that use the POSIX attributes set by the admin must
+-         * inherit the MPG setting from the parent domain so that the
+-         * auto_private_groups options works for trusted domains as well
+-         */
+-        mpg_mode = get_domain_mpg_mode(domain);
+-    }
++    default_mpg_mode = get_default_subdom_mpg_mode(idmap_ctx, domain,
++                                                   name, sid_str);
++
++    mpg_mode = ad_subdom_mpg_mode(tmp_ctx, cdb, domain,
++                                  default_mpg_mode, name);
++    DEBUG(SSSDBG_CONF_SETTINGS, "MPG mode of %s is %s\n",
++                                name, str_domain_mpg_mode(mpg_mode));
+ 
+     ret = sysdb_subdomain_store(domain->sysdb, name, realm, flat, sid_str,
+                                 mpg_mode, enumerate, domain->forest, 0, NULL);
+@@ -625,7 +700,8 @@ static errno_t ad_subdomains_refresh(struct be_ctx *be_ctx,
+                 goto done;
+             }
+ 
+-            ret = ad_subdom_store(idmap_ctx, domain, subdomains[c], enumerate);
++            ret = ad_subdom_store(be_ctx->cdb, idmap_ctx, domain,
++                                  subdomains[c], enumerate);
+             if (ret) {
+                 /* Nothing we can do about the error. Let's at least try
+                  * to reuse the existing domains
+@@ -660,7 +736,8 @@ static errno_t ad_subdomains_refresh(struct be_ctx *be_ctx,
+             goto done;
+         }
+ 
+-        ret = ad_subdom_store(idmap_ctx, domain, subdomains[c], enumerate);
++        ret = ad_subdom_store(be_ctx->cdb, idmap_ctx, domain,
++                              subdomains[c], enumerate);
+         if (ret) {
+             DEBUG(SSSDBG_MINOR_FAILURE, "Failed to parse subdom data, "
+                   "will try to use cached subdomain\n");
+diff --git a/src/providers/ldap/sdap_async_users.c b/src/providers/ldap/sdap_async_users.c
+index 92eeda1d3..af4dc1a17 100644
+--- a/src/providers/ldap/sdap_async_users.c
++++ b/src/providers/ldap/sdap_async_users.c
+@@ -389,7 +389,7 @@ int sdap_save_user(TALLOC_CTX *memctx,
+             goto done;
+         }
+ 
+-        if (IS_SUBDOMAIN(dom) || sss_domain_is_mpg(dom) == true) {
++        if (sss_domain_is_mpg(dom) == true) {
+             /* For subdomain users, only create the private group as
+              * the subdomain is an MPG domain.
+              * But we have to save the GID of the original primary group
+diff --git a/src/util/domain_info_utils.c b/src/util/domain_info_utils.c
+index 4896ef051..4b1c9df39 100644
+--- a/src/util/domain_info_utils.c
++++ b/src/util/domain_info_utils.c
+@@ -889,6 +889,14 @@ bool sss_domain_is_forest_root(struct sss_domain_info *dom)
+     return (dom->forest_root == dom);
+ }
+ 
++char *subdomain_create_conf_path_from_str(TALLOC_CTX *mem_ctx,
++                                          const char *parent_name,
++                                          const char *subdom_name)
++{
++    return talloc_asprintf(mem_ctx, CONFDB_DOMAIN_PATH_TMPL "/%s",
++                           parent_name, subdom_name);
++}
++
+ char *subdomain_create_conf_path(TALLOC_CTX *mem_ctx,
+                                  struct sss_domain_info *subdomain)
+ {
+@@ -899,9 +907,9 @@ char *subdomain_create_conf_path(TALLOC_CTX *mem_ctx,
+         return NULL;
+     }
+ 
+-    return talloc_asprintf(mem_ctx, CONFDB_DOMAIN_PATH_TMPL "/%s",
+-                           subdomain->parent->name,
+-                           subdomain->name);
++    return subdomain_create_conf_path_from_str(mem_ctx,
++                                               subdomain->parent->name,
++                                               subdomain->name);
+ }
+ 
+ const char *sss_domain_type_str(struct sss_domain_info *dom)
+diff --git a/src/util/util.h b/src/util/util.h
+index 1e36bf02a..3003583b7 100644
+--- a/src/util/util.h
++++ b/src/util/util.h
+@@ -557,6 +557,9 @@ find_domain_by_object_name_ex(struct sss_domain_info *domain,
+ bool subdomain_enumerates(struct sss_domain_info *parent,
+                           const char *sd_name);
+ 
++char *subdomain_create_conf_path_from_str(TALLOC_CTX *mem_ctx,
++                                          const char *parent_name,
++                                          const char *subdom_name);
+ char *subdomain_create_conf_path(TALLOC_CTX *mem_ctx,
+                                  struct sss_domain_info *subdomain);
+ 
+-- 
+2.19.1
+

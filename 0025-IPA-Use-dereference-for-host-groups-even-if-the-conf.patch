@@ -1,0 +1,63 @@
+From 2c97edb4bd965499fe4cc39710de1a565c1b40d3 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Tue, 12 Mar 2019 12:48:48 +0100
+Subject: [PATCH 25/25] IPA: Use dereference for host groups even if the
+ configuration disables dereference
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Related:
+https://pagure.io/SSSD/sssd/issue/3979
+
+In some cases, it makes sense for performance reasons to disable
+dereference when processing user groups. But since processing of HBAC host
+groups is not much of a performance sensitive operation, we can get away
+with ignoring the client side setting and always using the dereference
+branch if the server supports the dereference call.
+
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit 9d63616000c0c886a6da87708a460218a9e24474)
+---
+ src/man/sssd-ldap.5.xml       | 11 +++++++++--
+ src/providers/ipa/ipa_hosts.c |  2 +-
+ 2 files changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/src/man/sssd-ldap.5.xml b/src/man/sssd-ldap.5.xml
+index 5b858be62..25acc19e6 100644
+--- a/src/man/sssd-ldap.5.xml
++++ b/src/man/sssd-ldap.5.xml
+@@ -1601,8 +1601,15 @@
+                             they are looked up individually.
+                         </para>
+                         <para>
+-                            You can turn off dereference lookups completely by
+-                            setting the value to 0.
++                            You can turn off dereference lookups completely
++                            by setting the value to 0. Please note that
++                            there are some codepaths in SSSD, like the IPA
++                            HBAC provider, that are only implemented using
++                            the dereference call, so even with dereference
++                            explicitly disabled, those parts will still
++                            use dereference if the server supports it
++                            and advertises the dereference control in the
++                            rootDSE object.
+                         </para>
+                         <para>
+                             A dereference lookup is a means of fetching all
+diff --git a/src/providers/ipa/ipa_hosts.c b/src/providers/ipa/ipa_hosts.c
+index 288bfb865..e209bca67 100644
+--- a/src/providers/ipa/ipa_hosts.c
++++ b/src/providers/ipa/ipa_hosts.c
+@@ -157,7 +157,7 @@ ipa_host_info_done(struct tevent_req *subreq)
+                 return;
+             }
+ 
+-            if (!sdap_has_deref_support(state->sh, state->opts)) {
++            if (!sdap_has_deref_support_ex(state->sh, state->opts, true)) {
+                 DEBUG(SSSDBG_CRIT_FAILURE, "Server does not support deref\n");
+                 tevent_req_error(req, EIO);
+                 return;
+-- 
+2.19.1
+

@@ -130,6 +130,7 @@ struct sdap_ppolicy_data {
 #define SDAP_ROOTDSE_ATTR_NAMING_CONTEXTS "namingContexts"
 #define SDAP_ROOTDSE_ATTR_DEFAULT_NAMING_CONTEXT "defaultNamingContext"
 #define SDAP_ROOTDSE_ATTR_AD_VERSION "domainControllerFunctionality"
+#define SDAP_ROOTDSE_ATTR_AD_SCHEMA_NC "schemaNamingContext"
 
 #define SDAP_IPA_USN "entryUSN"
 #define SDAP_IPA_LAST_USN "lastUSN"
@@ -175,6 +176,7 @@ enum sdap_basic_opt {
     SDAP_AUTOFS_SEARCH_BASE,
     SDAP_AUTOFS_MAP_MASTER_NAME,
     SDAP_SCHEMA,
+    SDAP_PWMODIFY_MODE,
     SDAP_OFFLINE_TIMEOUT,
     SDAP_FORCE_UPPER_CASE_REALM,
     SDAP_ENUM_REFRESH_TIMEOUT,
@@ -493,11 +495,19 @@ struct sdap_options {
         SDAP_SCHEMA_AD = 4          /* AD's member/memberof */
     } schema_type;
 
+    /* password modify mode */
+    enum pwmodify_mode {
+        SDAP_PWMODIFY_EXOP = 1,     /* pwmodify extended operation */
+        SDAP_PWMODIFY_LDAP = 2      /* ldap_modify of userPassword */
+    } pwmodify_mode;
+
     /* The search bases for the domain or its subdomain */
     struct sdap_domain *sdom;
 
+    /* The options below are normally only used with AD */
     bool support_matching_rule;
     enum dc_functional_level dc_functional_level;
+    const char *schema_basedn;
 
     /* Certificate mapping support */
     struct sdap_certmap_ctx *sdap_certmap_ctx;
@@ -511,7 +521,6 @@ struct sdap_server_opts {
     char *max_group_value;
     char *max_service_value;
     char *max_sudo_value;
-    bool posix_checked;
 };
 
 struct sdap_id_ctx;

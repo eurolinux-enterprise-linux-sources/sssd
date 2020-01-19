@@ -1,0 +1,94 @@
+From e6734785fd1970c4b63d0dd021074003e35d7137 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Fri, 5 Apr 2019 18:05:08 +0200
+Subject: [PATCH] winbind idmap plugin: update struct idmap_domain to latest
+ version
+
+While updating to interface version 6 we forgot to add the query_user
+member.
+
+Recent version of Samba added a new member dom_sid. Unfortunately the
+interface version was not update for this change so we have to enable
+the member based on the Samba version.
+
+Related to https://pagure.io/SSSD/sssd/issue/4005
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 30734e5f213f4bd2984e632d497d7cbfc16495db)
+---
+ src/external/samba.m4                         | 13 +++++++++++++
+ src/lib/winbind_idmap_sss/winbind_idmap_sss.c |  4 ++++
+ src/lib/winbind_idmap_sss/winbind_idmap_sss.h | 15 +++++++++++++++
+ 3 files changed, 32 insertions(+)
+
+diff --git a/src/external/samba.m4 b/src/external/samba.m4
+index 7a8c1eb7b..e68f064b3 100644
+--- a/src/external/samba.m4
++++ b/src/external/samba.m4
+@@ -121,6 +121,19 @@ int main(void)
+     AC_MSG_NOTICE([Samba's idmap interface version: $idmap_version])
+     AC_DEFINE_UNQUOTED(SMB_IDMAP_INTERFACE_VERSION, $idmap_version,
+                        [Detected version of Samba's idmap plugin interface])
++
++    samba_major_version=`echo -e '#include <samba/version.h>\nSAMBA_VERSION_MAJOR' | $CPP $SMBCLIENT_CFLAGS -P -`
++    samba_minor_version=`echo -e '#include <samba/version.h>\nSAMBA_VERSION_MINOR' | $CPP $SMBCLIENT_CFLAGS -P -`
++    samba_release_version=`echo -e '#include <samba/version.h>\nSAMBA_VERSION_RELEASE' | $CPP $SMBCLIENT_CFLAGS -P -`
++    AC_MSG_NOTICE([Samba version: $samba_major_version $samba_minor_version $samba_release_version])
++    if test $samba_major_version -ge 4 -a $samba_minor_version -ge 8 ; then
++        AC_DEFINE_UNQUOTED(SMB_IDMAP_DOMAIN_HAS_DOM_SID, 1,
++                           [Samba's struct idmap_domain has dom_sid member])
++        AC_MSG_NOTICE([Samba's struct idmap_domain has dom_sid member])
++    else
++        AC_MSG_NOTICE([Samba's struct idmap_domain does not have dom_sid member])
++    fi
++
+ fi
+ 
+ SAVE_CFLAGS=$CFLAGS
+diff --git a/src/lib/winbind_idmap_sss/winbind_idmap_sss.c b/src/lib/winbind_idmap_sss/winbind_idmap_sss.c
+index 0d9109455..58375322a 100644
+--- a/src/lib/winbind_idmap_sss/winbind_idmap_sss.c
++++ b/src/lib/winbind_idmap_sss/winbind_idmap_sss.c
+@@ -55,6 +55,10 @@ static NTSTATUS idmap_sss_initialize(struct idmap_domain *dom)
+         return NT_STATUS_NO_MEMORY;
+     }
+ 
++#if SMB_IDMAP_INTERFACE_VERSION == 6
++    dom->query_user = NULL;
++#endif
++
+     dom->private_data = ctx;
+ 
+     return NT_STATUS_OK;
+diff --git a/src/lib/winbind_idmap_sss/winbind_idmap_sss.h b/src/lib/winbind_idmap_sss/winbind_idmap_sss.h
+index 868049fff..78800838e 100644
+--- a/src/lib/winbind_idmap_sss/winbind_idmap_sss.h
++++ b/src/lib/winbind_idmap_sss/winbind_idmap_sss.h
+@@ -70,9 +70,24 @@ struct id_map {
+ #error Missing Samba idmap interface version
+ #endif
+ 
++#if SMB_IDMAP_INTERFACE_VERSION == 6
++struct wbint_userinfo;
++#endif
++
+ struct idmap_domain {
+     const char *name;
++#if SMB_IDMAP_INTERFACE_VERSION == 6 && defined(SMB_IDMAP_DOMAIN_HAS_DOM_SID)
++    /*
++     * dom_sid is currently only initialized in the unixids_to_sids request,
++     * so don't rely on this being filled out everywhere!
++     */
++    struct dom_sid dom_sid;
++#endif
+     struct idmap_methods *methods;
++#if SMB_IDMAP_INTERFACE_VERSION == 6
++    NTSTATUS (*query_user)(struct idmap_domain *domain,
++                           struct wbint_userinfo *info);
++#endif
+     uint32_t low_id;
+     uint32_t high_id;
+     bool read_only;
+-- 
+2.19.1
+

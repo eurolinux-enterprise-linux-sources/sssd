@@ -43,10 +43,11 @@
     <refsect2 id='priority'>
         <title>ПРІОРИТЕТНІСТЬ</title>
         <para>
-            The rules are processed by priority while the number '0' (zero)  indicates
-the highest priority. The higher the number the lower is the priority. A
-missing value indicates the lowest priority. The rules processing is stopped
-when a matched rule is found and no further rules are checked.
+            Правила оброблятимуться за пріоритетністю, номер «0» (нуль) відповідає
+найвищому рівню пріоритетності. Чим більшим є значення, тим нижчою є
+пріоритетність. Якщо значення не вказано, пріоритетність вважається
+найнижчою. Обробку правил буде зупинено, якщо вдасться знайти відповідність
+правилу, подальші правила не оброблятимуться.
         </para>
         <para>
             На внутрішньому рівні пріоритетність визначається 32-бітовим цілим числом

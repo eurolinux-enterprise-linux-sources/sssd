@@ -19,27 +19,59 @@
     <refsect1 id='description'>
         <title>ОПИС</title>
         <para>
-            Додаток пошуку Kerberos <command>sssd_krb5_locator_plugin</command>
-використовується засобом обробки Kerberos <citerefentry>
-<refentrytitle>sssd</refentrytitle> <manvolnum>8</manvolnum> </citerefentry>
-для сповіщення бібліотек Kerberos яку область і KDC слід
-використовувати. Типово, таке сповіщення виконується за допомогою
-<citerefentry> <refentrytitle>krb5.conf</refentrytitle>
-<manvolnum>5</manvolnum> </citerefentry>, файла, читання якого завжди
-виконується бібліотеками Kerberos. Щоб спростити налаштування, область та
-KDC можна визначити у <citerefentry>
-<refentrytitle>sssd.conf</refentrytitle> <manvolnum>5</manvolnum>
-</citerefentry> у спосіб, описаний на сторінці довідки <citerefentry>
-<refentrytitle>sssd-krb5</refentrytitle> <manvolnum>5</manvolnum>
-</citerefentry>
+            Для пошуку KDC для вказаної області Kerberos libkrb5 використовує додаток
+пошуку Kerberos <command>sssd_krb5_locator_plugin</command>. SSSD надає
+такий додаток для спрямовування усіх клієнтів Kerberos у системі до єдиного
+KDC. Загалом, немає значення, з яким KDC клієнт обмінюється даними. Втім,
+бувають випадки, наприклад, після зміни пароля, коли не усі KDC перебувають
+в одному стані, оскільки нові дані має бути спочатку відтворено на усіх
+серверах. Щоб уникнути неочікуваних помилок під час розпізнавання або навіть
+блокування облікових записів, варто примусово обмежувати обмін даними до
+одного KDC якомога довше.
         </para>
         <para>
-            <citerefentry> <refentrytitle>sssd</refentrytitle> <manvolnum>8</manvolnum>
-</citerefentry> зберігає область і назву або IP-адресу KDC у змінних
-середовища SSSD_KRB5_REALM і SSSD_KRB5_KDC, відповідно. Якщо програма
-<command>sssd_krb5_locator_plugin</command> викликається бібліотеками
-kerberos, ця програма читає і визначає ці змінні і повертає їхні значення
-бібліотекам.
+            libkrb5 шукатиме додаток пошуку у підкаталозі libkrb5 каталогу додатків
+Kerberos, див. plugin_base_dir у <citerefentry>
+<refentrytitle>krb5.conf</refentrytitle> <manvolnum>5</manvolnum>
+</citerefentry>, щоб дізнатися більше. Додаток можна вимкнути лише
+вилученням файла додатка. У налаштуваннях Kerberos не передбачено пунктів
+для його вимикання. Втім, для вимикання додатка для окремих команд можна
+скористатися змінною середовища SSSD_KRB5_LOCATOR_DISABLE. Крім того, можна
+скористатися параметром SSSD krb5_use_kdcinfo=False з метою заборони
+створення даних, які потрібні для роботи додатка. Якщо визначити цю змінну,
+додаток викликатиметься, але не надаватиме дані функції виклику, отже
+libkrb5 зможе повернутися до інших методів, які визначено у krb5.conf.
+        </para>
+        <para>
+            The plugin reads the information about the KDCs of a given realm from a file
+called <filename>kdcinfo.REALM</filename>. The file should contain one or
+more DNS names or IP addresses either in dotted-decimal IPv4 notation or the
+hexadecimal IPv6 notation.  An optional port number can be added to the end
+separated with a colon, the IPv6 address has to be enclosed in squared
+brackets in this case as usual. Valid entries are:
+            <itemizedlist>
+                <listitem><para>kdc.example.com</para></listitem>
+                <listitem><para>kdc.example.com:321</para></listitem>
+                <listitem><para>1.2.3.4</para></listitem>
+                <listitem><para>5.6.7.8:99</para></listitem>
+                <listitem><para>2001:db8:85a3::8a2e:370:7334</para></listitem>
+                <listitem><para>[2001:db8:85a3::8a2e:370:7334]:321</para></listitem>
+            </itemizedlist>
+            Надавач даних розпізнавання krb5 SSSD, який використовується також
+надавачами даних IPA та AD, додає до цього файла адресу поточного KDC або
+контролера домену, який використовує SSSD.
+        </para>
+        <para>
+            У середовищах із придатними лише для читання або для читання запису KDC, де,
+як очікується, клієнти використовуватимуть придатні лише для читання
+екземпляри для виконання загальних завдань і користуватиметься призначеними
+для запису KDC лише для внесення змін до налаштувань, зокрема зміни паролів,
+<filename>kpasswdinfo.REALM</filename> також використовується для визначення
+придатних до читання і запису KDC. Якщо цей файл існує для вказаної області,
+його вміст буде використано додатком для надання відповідей на запити щодо
+сервера kpasswd або kadmin чи щодо певного основного KDC MIT Kerberos. Якщо
+адреса містить номер порту, для останньої мети використовуватиметься типовий
+порт KDC 88.
         </para>
     </refsect1>
 
@@ -60,6 +92,12 @@ stderr.
             Якщо встановлено будь-яке значення для змінної середовища
 SSSD_KRB5_LOCATOR_DISABLE, додаток буде вимкнено і поверне функції виклику
 лише KRB5_PLUGIN_NO_HANDLE.
+        </para>
+        <para>
+            If the environment variable SSSD_KRB5_LOCATOR_IGNORE_DNS_FAILURES is set to
+any value plugin will try to resolve all DNS names in kdcinfo file. By
+default plugin returns KRB5_PLUGIN_NO_HANDLE to the caller immediately on
+first DNS resolving failure.
         </para>
     </refsect1>
 

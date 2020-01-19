@@ -97,6 +97,9 @@
    */
 #undef HAVE_DCGETTEXT
 
+/* Build with debian config */
+#undef HAVE_DEBIAN
+
 /* Define to 1 if you have the declaration of `cygwin_conv_path', and to 0 if
    you don't. */
 #undef HAVE_DECL_CYGWIN_CONV_PATH
@@ -119,6 +122,9 @@
 /* Define to 1 if the system has the type `errno_t'. */
 #undef HAVE_ERRNO_T
 
+/* Build with fedora config */
+#undef HAVE_FEDORA
+
 /* whether compiler supports __attribute__((destructor)) */
 #undef HAVE_FUNCTION_ATTRIBUTE_DESTRUCTOR
 
@@ -133,6 +139,9 @@
 
 /* Build with gdm-pam-extensions support */
 #undef HAVE_GDM_PAM_EXTENSIONS
+
+/* Build with gentoo config */
+#undef HAVE_GENTOO
 
 /* Define to 1 if you have the `getpgrp' function. */
 #undef HAVE_GETPGRP
@@ -389,6 +398,9 @@
 /* Build with python3 bindings */
 #undef HAVE_PYTHON3_BINDINGS
 
+/* Build with redhat config */
+#undef HAVE_REDHAT
+
 /* Does libnl have rtnl_route_get_oif? */
 #undef HAVE_RTNL_ROUTE_GET_OIF
 
@@ -467,6 +479,9 @@
 /* Define to 1 if `lc_arg' is a member of `struct ldap_conncb'. */
 #undef HAVE_STRUCT_LDAP_CONNCB_LC_ARG
 
+/* Define to 1 if `resource_groups' is a member of `struct PAC_LOGON_INFO'. */
+#undef HAVE_STRUCT_PAC_LOGON_INFO_RESOURCE_GROUPS
+
 /* Define to 1 if `gid' is a member of `struct ucred'. */
 #undef HAVE_STRUCT_UCRED_GID
 
@@ -475,6 +490,9 @@
 
 /* Define to 1 if `uid' is a member of `struct ucred'. */
 #undef HAVE_STRUCT_UCRED_UID
+
+/* Build with suse config */
+#undef HAVE_SUSE
 
 /* Build with systemd support */
 #undef HAVE_SYSTEMD

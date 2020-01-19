@@ -333,7 +333,7 @@ static errno_t s2n_encode_request(TALLOC_CTX *mem_ctx,
                                                   req_input->inp.id);
             } else {
                 DEBUG(SSSDBG_OP_FAILURE, "Unexpected input type [%d].\n",
-                                          req_input->type == REQ_INP_ID);
+                                          req_input->type);
                 ret = EINVAL;
                 goto done;
             }
@@ -349,7 +349,7 @@ static errno_t s2n_encode_request(TALLOC_CTX *mem_ctx,
                                                   req_input->inp.id);
             } else {
                 DEBUG(SSSDBG_OP_FAILURE, "Unexpected input type [%d].\n",
-                                          req_input->type == REQ_INP_ID);
+                                          req_input->type);
                 ret = EINVAL;
                 goto done;
             }
@@ -360,7 +360,7 @@ static errno_t s2n_encode_request(TALLOC_CTX *mem_ctx,
                                                req_input->inp.secid);
             } else {
                 DEBUG(SSSDBG_OP_FAILURE, "Unexpected input type [%d].\n",
-                                         req_input->type == REQ_INP_ID);
+                                         req_input->type);
                 ret = EINVAL;
                 goto done;
             }
@@ -1750,6 +1750,107 @@ done:
     return ret;
 }
 
+static errno_t s2n_remove_missing_object(TALLOC_CTX *mem_ctx,
+                                         struct sss_domain_info *domain,
+                                         int entry_type,
+                                         struct req_input *req_input)
+{
+    int ret;
+    bool name_is_upn = false;
+    char *id_str = NULL;
+    char *fq_name = NULL;
+
+    if (req_input->type == REQ_INP_ID) {
+        id_str = talloc_asprintf(mem_ctx, "%"SPRIuid, req_input->inp.id);
+        if (id_str == NULL) {
+            DEBUG(SSSDBG_OP_FAILURE, "talloc_asprintf failed.\n");
+            ret = ENOMEM;
+            goto done;
+        }
+    }
+
+    switch (entry_type) {
+    case BE_REQ_USER_AND_GROUP:
+    case BE_REQ_USER:
+        if (req_input->type == REQ_INP_NAME) {
+            name_is_upn = strchr(req_input->inp.name, '@') == NULL ? false
+                                                                   : true;
+            /* Expand to fully-qualified internal name */
+            if (!name_is_upn) {
+                fq_name = sss_create_internal_fqname(mem_ctx,
+                                                     req_input->inp.name,
+                                                     domain->name);
+                if (fq_name == NULL) {
+                    DEBUG(SSSDBG_OP_FAILURE,
+                          "sss_create_internal_fqname failed.\n");
+                    ret = ENOMEM;
+                    goto done;
+                }
+            }
+            ret = users_get_handle_no_user(mem_ctx, domain, BE_FILTER_NAME,
+                                           fq_name != NULL ? fq_name
+                                                          : req_input->inp.name,
+                                           name_is_upn);
+        } else if (req_input->type == REQ_INP_ID) {
+            ret = users_get_handle_no_user(mem_ctx, domain, BE_FILTER_IDNUM,
+                                           id_str, false);
+        } else {
+            DEBUG(SSSDBG_OP_FAILURE, "Unexpected input type [%d].\n",
+                                      req_input->type);
+            ret = EINVAL;
+            goto done;
+        }
+        if (ret != EOK || entry_type == BE_REQ_USER) {
+            break;
+        }
+        /* Fallthough if BE_REQ_USER_AND_GROUP */
+        SSS_ATTRIBUTE_FALLTHROUGH;
+    case BE_REQ_GROUP:
+        if (req_input->type == REQ_INP_NAME) {
+            /* Expand to fully-qualified internal name */
+            fq_name = sss_create_internal_fqname(mem_ctx,
+                                                 req_input->inp.name,
+                                                 domain->name);
+            if (fq_name == NULL) {
+                DEBUG(SSSDBG_OP_FAILURE,
+                      "sss_create_internal_fqname failed.\n");
+                ret = ENOMEM;
+                goto done;
+            }
+            ret = groups_get_handle_no_group(mem_ctx, domain, BE_FILTER_NAME,
+                                             fq_name);
+        } else if (req_input->type == REQ_INP_ID) {
+            ret = groups_get_handle_no_group(mem_ctx, domain,BE_FILTER_IDNUM,
+                                             id_str);
+        } else {
+            DEBUG(SSSDBG_OP_FAILURE, "Unexpected input type [%d].\n",
+                                      req_input->type);
+            ret = EINVAL;
+            goto done;
+        }
+        break;
+    case BE_REQ_BY_SECID:
+        ret = EOK;
+        break;
+    case BE_REQ_BY_CERT:
+        ret = EOK;
+        break;
+    default:
+        DEBUG(SSSDBG_OP_FAILURE, "Unexpected entry type [%d].\n", entry_type);
+        ret = EINVAL;
+    }
+
+done:
+    if (ret != EOK) {
+        DEBUG(SSSDBG_OP_FAILURE,
+              "Error while trying to remove user or group from cache.\n");
+    }
+
+    talloc_free(id_str);
+    talloc_free(fq_name);
+    return ret;
+}
+
 static void ipa_s2n_get_list_done(struct tevent_req  *subreq);
 static void ipa_s2n_get_user_get_override_done(struct tevent_req *subreq);
 static void ipa_s2n_get_user_done(struct tevent_req *subreq)
@@ -1771,11 +1872,21 @@ static void ipa_s2n_get_user_done(struct tevent_req *subreq)
     ret = ipa_s2n_exop_recv(subreq, state, &retoid, &retdata);
     talloc_zfree(subreq);
     if (ret != EOK) {
-        DEBUG(SSSDBG_OP_FAILURE, "s2n exop request failed.\n");
-        if (state->req_input->type == REQ_INP_CERT) {
-            DEBUG(SSSDBG_OP_FAILURE,
-                  "Maybe the server does not support lookups by "
-                  "certificates.\n");
+        if (ret == ENOENT) {
+            ret = s2n_remove_missing_object(state, state->dom,
+                                            state->entry_type,
+                                            state->req_input);
+            if (ret != EOK) {
+                DEBUG(SSSDBG_OP_FAILURE,
+                      "s2n_remove_missing_object failed [%d].\n", ret);
+            }
+        } else {
+            DEBUG(SSSDBG_OP_FAILURE, "s2n exop request failed.\n");
+            if (state->req_input->type == REQ_INP_CERT) {
+                DEBUG(SSSDBG_OP_FAILURE,
+                      "Maybe the server does not support lookups by "
+                      "certificates.\n");
+            }
         }
         goto done;
     }
@@ -2038,7 +2149,9 @@ static errno_t get_groups_dns(TALLOC_CTX *mem_ctx, struct sss_domain_info *dom,
     int c;
     struct sss_domain_info *root_domain;
     char **dn_list;
+    size_t dn_list_c;
     struct ldb_message *msg;
+    struct ldb_dn *user_base_dn = NULL;
 
     if (name_list == NULL) {
         *_dn_list = NULL;
@@ -2074,6 +2187,7 @@ static errno_t get_groups_dns(TALLOC_CTX *mem_ctx, struct sss_domain_info *dom,
         goto done;
     }
 
+    dn_list_c = 0;
     for (c = 0; name_list[c] != NULL; c++) {
         dom = find_domain_by_object_name(root_domain, name_list[c]);
         if (dom == NULL) {
@@ -2091,68 +2205,41 @@ static errno_t get_groups_dns(TALLOC_CTX *mem_ctx, struct sss_domain_info *dom,
         ret = sysdb_search_group_by_name(tmp_ctx, dom, name_list[c], NULL,
                                          &msg);
         if (ret == EOK) {
-            dn_list[c] = ldb_dn_alloc_linearized(dn_list, msg->dn);
+            talloc_free(user_base_dn);
+            user_base_dn = sysdb_user_base_dn(tmp_ctx, dom);
+            if (user_base_dn == NULL) {
+                DEBUG(SSSDBG_OP_FAILURE, "sysdb_user_base_dn failed.\n");
+                ret = ENOMEM;
+                goto done;
+            }
+            if (ldb_dn_compare_base(user_base_dn, msg->dn) == 0) {
+                DEBUG(SSSDBG_TRACE_FUNC, "Skipping user private group [%s].\n",
+                                         ldb_dn_get_linearized(msg->dn));
+                continue;
+            }
+
+            dn_list[dn_list_c] = ldb_dn_alloc_linearized(dn_list, msg->dn);
         } else {
             /* best effort, try to construct the DN */
             DEBUG(SSSDBG_TRACE_FUNC,
                   "sysdb_search_group_by_name failed with [%d], "
                   "generating DN for [%s] in domain [%s].\n",
                   ret, name_list[c], dom->name);
-            dn_list[c] = sysdb_group_strdn(dn_list, dom->name, name_list[c]);
+            dn_list[dn_list_c] = sysdb_group_strdn(dn_list, dom->name,
+                                                   name_list[c]);
         }
-        if (dn_list[c] == NULL) {
+        if (dn_list[dn_list_c] == NULL) {
             DEBUG(SSSDBG_OP_FAILURE, "ldb_dn_alloc_linearized failed.\n");
             ret = ENOMEM;
             goto done;
         }
 
-        DEBUG(SSSDBG_TRACE_ALL, "Added [%s][%s].\n", name_list[c], dn_list[c]);
+        DEBUG(SSSDBG_TRACE_ALL, "Added [%s][%s].\n", name_list[c],
+                                                     dn_list[dn_list_c]);
+        dn_list_c++;
     }
 
     *_dn_list = talloc_steal(mem_ctx, dn_list);
-    ret = EOK;
-
-done:
-    talloc_free(tmp_ctx);
-
-    return ret;
-}
-
-static errno_t add_emails_to_aliases(struct sysdb_attrs *attrs,
-                                     struct sss_domain_info *dom)
-{
-    int ret;
-    const char **emails;
-    size_t c;
-    TALLOC_CTX *tmp_ctx;
-
-    tmp_ctx = talloc_new(NULL);
-    if (tmp_ctx == NULL) {
-        DEBUG(SSSDBG_OP_FAILURE, "talloc_new failed.\n");
-        return ENOMEM;
-    }
-
-    ret = sysdb_attrs_get_string_array(attrs, SYSDB_USER_EMAIL, tmp_ctx,
-                                       &emails);
-    if (ret == EOK) {
-        for (c = 0; emails[c] != NULL; c++) {
-            if (is_email_from_domain(emails[c], dom)) {
-                ret = sysdb_attrs_add_lc_name_alias_safe(attrs, emails[c]);
-                if (ret != EOK) {
-                    DEBUG(SSSDBG_OP_FAILURE,
-                          "Failed to add lower-cased version of email [%s] "
-                          "into the alias list\n", emails[c]);
-                    goto done;
-                }
-            }
-        }
-    } else if (ret == ENOENT) {
-        DEBUG(SSSDBG_TRACE_ALL, "No email addresses available.\n");
-    } else {
-        DEBUG(SSSDBG_OP_FAILURE,
-              "sysdb_attrs_get_string_array failed, skipping ...\n");
-    }
-
     ret = EOK;
 
 done:
@@ -2314,12 +2401,6 @@ static errno_t ipa_s2n_save_objects(struct sss_domain_info *dom,
                 goto done;
             }
 
-            ret = add_emails_to_aliases(attrs->sysdb_attrs, dom);
-            if (ret != EOK) {
-                DEBUG(SSSDBG_OP_FAILURE,
-                      "add_emails_to_aliases failed, skipping ...\n");
-            }
-
             if (upn == NULL) {
                 /* We also have to store a fake UPN here, because otherwise the
                  * krb5 child later won't be able to properly construct one as
@@ -2401,7 +2482,7 @@ static errno_t ipa_s2n_save_objects(struct sss_domain_info *dom,
             }
 
             gid = 0;
-            if (dom->mpg == false) {
+            if (sss_domain_is_mpg(dom) == false) {
                 gid = attrs->a.user.pw_gid;
             } else {
                 /* The extdom plugin always returns the objects with the
@@ -2472,7 +2553,7 @@ static errno_t ipa_s2n_save_objects(struct sss_domain_info *dom,
                                    missing[0] == NULL ? NULL
                                                       : discard_const(missing),
                                    dom->user_timeout, now);
-            if (ret == EEXIST && dom->mpg == true) {
+            if (ret == EEXIST && sss_domain_is_mpg(dom) == true) {
                 /* This handles the case where getgrgid() was called for
                  * this user, so a group was created in the cache
                  */

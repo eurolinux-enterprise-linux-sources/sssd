@@ -1,0 +1,881 @@
+From a5e15f1e5af7d7c41717c18566ea0f2a01c086ec Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 27 Mar 2019 09:02:27 +0100
+Subject: [PATCH 16/21] pam: introduce prompt_config struct
+
+prompt_config is the internal struct to control the prompting of
+pam_sss. To make it easy to change internal details when more options
+are added it should be opaque and only accessed by getters and setter.
+
+Related to https://pagure.io/SSSD/sssd/issue/3264
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit fa8ef7c6db19a160d807f05b08bbc66c0c25ebfe)
+---
+ Makefile.am                            |  17 +
+ src/sss_client/pam_sss_prompt_config.c | 547 +++++++++++++++++++++++++
+ src/sss_client/sss_cli.h               |  29 ++
+ src/tests/cmocka/test_prompt_config.c  | 215 ++++++++++
+ 4 files changed, 808 insertions(+)
+ create mode 100644 src/sss_client/pam_sss_prompt_config.c
+ create mode 100644 src/tests/cmocka/test_prompt_config.c
+
+diff --git a/Makefile.am b/Makefile.am
+index d09f50aa2..f7f55e96a 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -241,6 +241,7 @@ if HAVE_CMOCKA
+         test-negcache \
+         negcache_2-tests \
+         test-authtok \
++        test_prompt_config \
+         sss_nss_idmap-tests \
+         deskprofile_utils-tests \
+         dyndns-tests \
+@@ -2644,6 +2645,21 @@ test_authtok_LDADD = \
+     libsss_debug.la \
+     $(NULL)
+ 
++test_prompt_config_SOURCES = \
++    src/tests/cmocka/test_prompt_config.c \
++    src/sss_client/pam_sss_prompt_config.c \
++    $(NULL)
++test_prompt_config_CFLAGS = \
++    $(AM_CFLAGS) \
++    $(POPT_CFLAGS) \
++    $(NULL)
++test_prompt_config_LDADD = \
++    $(CMOCKA_LIBS) \
++    $(POPT_LIBS) \
++    libsss_debug.la \
++    $(TALLOC_LIBS) \
++    $(NULL)
++
+ sss_nss_idmap_tests_SOURCES = \
+     src/tests/cmocka/sss_nss_idmap-tests.c
+ sss_nss_idmap_tests_CFLAGS = \
+@@ -3820,6 +3836,7 @@ endif
+ pamlib_LTLIBRARIES = pam_sss.la
+ pam_sss_la_SOURCES = \
+     src/sss_client/pam_sss.c \
++    src/sss_client/pam_sss_prompt_config.c \
+     src/sss_client/pam_message.c \
+     src/sss_client/common.c \
+     src/sss_client/sss_cli.h \
+diff --git a/src/sss_client/pam_sss_prompt_config.c b/src/sss_client/pam_sss_prompt_config.c
+new file mode 100644
+index 000000000..35094b406
+--- /dev/null
++++ b/src/sss_client/pam_sss_prompt_config.c
+@@ -0,0 +1,547 @@
++/*
++    Authors:
++        Sumit Bose <sbose@redhat.com>
++
++    Copyright (C) 2019 Red Hat
++
++    This program is free software; you can redistribute it and/or modify
++    it under the terms of the GNU Lesser General Public License as published by
++    the Free Software Foundation; either version 3 of the License, or
++    (at your option) any later version.
++
++    This program is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU Lesser General Public License for more details.
++
++    You should have received a copy of the GNU Lesser General Public License
++    along with this program.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#include "config.h"
++#include <stdlib.h>
++#include <errno.h>
++
++#include "sss_cli.h"
++
++#include <libintl.h>
++#define _(STRING) dgettext (PACKAGE, STRING)
++
++struct prompt_config_password {
++    char *prompt;
++};
++
++struct prompt_config_2fa {
++    char *prompt_1st;
++    char *prompt_2nd;
++};
++
++struct prompt_config_2fa_single {
++    char *prompt;
++};
++
++struct prompt_config_sc_pin {
++    char *prompt; /* Currently not used */
++};
++
++struct prompt_config {
++    enum prompt_config_type type;
++    union {
++        struct prompt_config_password password;
++        struct prompt_config_2fa two_fa;
++        struct prompt_config_2fa_single two_fa_single;
++        struct prompt_config_sc_pin sc_pin;
++    } data;
++};
++
++enum prompt_config_type pc_get_type(struct prompt_config *pc)
++{
++    if (pc != NULL && pc->type > PC_TYPE_INVALID && pc->type < PC_TYPE_LAST) {
++        return pc->type;
++    }
++    return PC_TYPE_INVALID;
++}
++
++const char *pc_get_password_prompt(struct prompt_config *pc)
++{
++    if (pc != NULL && pc_get_type(pc) == PC_TYPE_PASSWORD) {
++        return pc->data.password.prompt;
++    }
++    return NULL;
++}
++
++const char *pc_get_2fa_1st_prompt(struct prompt_config *pc)
++{
++    if (pc != NULL && pc_get_type(pc) == PC_TYPE_2FA) {
++        return pc->data.two_fa.prompt_1st;
++    }
++    return NULL;
++}
++
++const char *pc_get_2fa_2nd_prompt(struct prompt_config *pc)
++{
++    if (pc != NULL && pc_get_type(pc) == PC_TYPE_2FA) {
++        return pc->data.two_fa.prompt_2nd;
++    }
++    return NULL;
++}
++
++const char *pc_get_2fa_single_prompt(struct prompt_config *pc)
++{
++    if (pc != NULL && pc_get_type(pc) == PC_TYPE_2FA_SINGLE) {
++        return pc->data.two_fa_single.prompt;
++    }
++    return NULL;
++}
++
++static void pc_free_password(struct prompt_config *pc)
++{
++    if (pc != NULL && pc_get_type(pc) == PC_TYPE_PASSWORD) {
++        free(pc->data.password.prompt);
++    }
++    return;
++}
++
++static void pc_free_2fa(struct prompt_config *pc)
++{
++    if (pc != NULL && pc_get_type(pc) == PC_TYPE_2FA) {
++        free(pc->data.two_fa.prompt_1st);
++        free(pc->data.two_fa.prompt_2nd);
++    }
++    return;
++}
++
++static void pc_free_2fa_single(struct prompt_config *pc)
++{
++    if (pc != NULL && pc_get_type(pc) == PC_TYPE_2FA_SINGLE) {
++        free(pc->data.two_fa_single.prompt);
++    }
++    return;
++}
++
++static void pc_free_sc_pin(struct prompt_config *pc)
++{
++    if (pc != NULL && pc_get_type(pc) == PC_TYPE_SC_PIN) {
++        free(pc->data.sc_pin.prompt);
++    }
++    return;
++}
++
++void pc_list_free(struct prompt_config **pc_list)
++{
++    size_t c;
++
++    if (pc_list == NULL) {
++        return;
++    }
++
++    for (c = 0; pc_list[c] != NULL; c++) {
++        switch (pc_list[c]->type) {
++        case PC_TYPE_PASSWORD:
++            pc_free_password(pc_list[c]);
++            break;
++        case PC_TYPE_2FA:
++            pc_free_2fa(pc_list[c]);
++            break;
++        case PC_TYPE_2FA_SINGLE:
++            pc_free_2fa_single(pc_list[c]);
++            break;
++        case PC_TYPE_SC_PIN:
++            pc_free_sc_pin(pc_list[c]);
++            break;
++        default:
++            return;
++        }
++        free(pc_list[c]);
++    }
++    free(pc_list);
++}
++
++static errno_t pc_list_add_pc(struct prompt_config ***pc_list,
++                              struct prompt_config *pc)
++{
++    size_t c = 0;
++    struct prompt_config **pcl;
++
++    for (c = 0; *pc_list != NULL && (*pc_list)[c] != NULL; c++); /* just counting */
++
++    pcl = realloc(*pc_list, (c + 2) * sizeof(struct prompt_config *));
++    if (pcl == NULL) {
++        return ENOMEM;
++    }
++    pcl[c] = pc;
++    pcl[c + 1] = NULL;
++
++    *pc_list = pcl;
++
++    return EOK;
++}
++
++#define DEFAULT_PASSWORD_PROMPT _("Password: ")
++#define DEFAULT_2FA_SINGLE_PROMPT _("Password + Token value: ")
++#define DEFAULT_2FA_PROMPT_1ST _("First Factor: ")
++#define DEFAULT_2FA_PROMPT_2ND _("Second Factor: ")
++
++errno_t pc_list_add_password(struct prompt_config ***pc_list,
++                             const char *prompt)
++{
++    struct prompt_config *pc;
++    int ret;
++
++    if (pc_list == NULL) {
++        return EINVAL;
++    }
++
++    pc = calloc(1, sizeof(struct prompt_config));
++    if (pc == NULL) {
++        return ENOMEM;
++    }
++
++    pc->type = PC_TYPE_PASSWORD;
++    pc->data.password.prompt = strdup(prompt != NULL ? prompt
++                                                     : DEFAULT_PASSWORD_PROMPT);
++    if (pc->data.password.prompt == NULL) {
++        ret = ENOMEM;
++        goto done;
++    }
++
++    ret = pc_list_add_pc(pc_list, pc);
++    if (ret != EOK) {
++        goto done;
++    }
++
++    ret = EOK;
++
++done:
++    if (ret != EOK) {
++        free(pc->data.password.prompt);
++        free(pc);
++    }
++
++    return ret;
++}
++
++errno_t pc_list_add_2fa(struct prompt_config ***pc_list,
++                        const char *prompt_1st, const char *prompt_2nd)
++{
++    struct prompt_config *pc;
++    int ret;
++
++    if (pc_list == NULL) {
++        return EINVAL;
++    }
++
++    pc = calloc(1, sizeof(struct prompt_config));
++    if (pc == NULL) {
++        return ENOMEM;
++    }
++
++    pc->type = PC_TYPE_2FA;
++    pc->data.two_fa.prompt_1st = strdup(prompt_1st != NULL ? prompt_1st
++                                                   : DEFAULT_2FA_PROMPT_1ST);
++    if (pc->data.two_fa.prompt_1st == NULL) {
++        ret = ENOMEM;
++        goto done;
++    }
++    pc->data.two_fa.prompt_2nd = strdup(prompt_2nd != NULL ? prompt_2nd
++                                                   : DEFAULT_2FA_PROMPT_2ND);
++    if (pc->data.two_fa.prompt_2nd == NULL) {
++        ret = ENOMEM;
++        goto done;
++    }
++
++    ret = pc_list_add_pc(pc_list, pc);
++    if (ret != EOK) {
++        goto done;
++    }
++
++    ret = EOK;
++
++done:
++    if (ret != EOK) {
++        free(pc->data.two_fa.prompt_1st);
++        free(pc->data.two_fa.prompt_2nd);
++        free(pc);
++    }
++
++    return ret;
++}
++
++errno_t pc_list_add_2fa_single(struct prompt_config ***pc_list,
++                               const char *prompt)
++{
++    struct prompt_config *pc;
++    int ret;
++
++    if (pc_list == NULL) {
++        return EINVAL;
++    }
++
++    pc = calloc(1, sizeof(struct prompt_config));
++    if (pc == NULL) {
++        return ENOMEM;
++    }
++
++    pc->type = PC_TYPE_2FA_SINGLE;
++    pc->data.two_fa_single.prompt = strdup(prompt != NULL ? prompt
++                                                   : DEFAULT_2FA_SINGLE_PROMPT);
++    if (pc->data.two_fa_single.prompt == NULL) {
++        ret = ENOMEM;
++        goto done;
++    }
++
++    ret = pc_list_add_pc(pc_list, pc);
++    if (ret != EOK) {
++        goto done;
++    }
++
++    ret = EOK;
++
++done:
++    if (ret != EOK) {
++        free(pc->data.two_fa_single.prompt);
++        free(pc);
++    }
++
++    return ret;
++}
++
++errno_t pam_get_response_prompt_config(struct prompt_config **pc_list, int *len,
++                                       uint8_t **data)
++{
++    size_t c;
++    size_t l = 0;
++    uint8_t *d = NULL;
++    uint32_t uint32_val;
++    size_t rp;
++
++    if (pc_list == NULL || *pc_list == NULL) {
++        return ENOENT;
++    }
++
++    l += sizeof(uint32_t);
++    for (c = 0; pc_list[c] != NULL; c++) {
++        l += sizeof(uint32_t);
++        switch (pc_list[c]->type) {
++        case PC_TYPE_PASSWORD:
++            l += sizeof(uint32_t);
++            l += strlen(pc_list[c]->data.password.prompt);
++            break;
++        case PC_TYPE_2FA:
++            l += sizeof(uint32_t);
++            l += strlen(pc_list[c]->data.two_fa.prompt_1st);
++            l += sizeof(uint32_t);
++            l += strlen(pc_list[c]->data.two_fa.prompt_2nd);
++            break;
++        case PC_TYPE_2FA_SINGLE:
++            l += sizeof(uint32_t);
++            l += strlen(pc_list[c]->data.two_fa_single.prompt);
++            break;
++        case PC_TYPE_SC_PIN:
++            break;
++        default:
++            return EINVAL;
++        }
++    }
++
++    d = malloc(l * sizeof(uint8_t));
++    if (d == NULL) {
++        return ENOMEM;
++    }
++
++    rp = 0;
++    uint32_val = c;
++    SAFEALIGN_COPY_UINT32(&d[rp], &uint32_val, &rp);
++
++    for (c = 0; pc_list[c] != NULL; c++) {
++        uint32_val = pc_list[c]->type;
++        SAFEALIGN_COPY_UINT32(&d[rp], &uint32_val, &rp);
++
++        switch (pc_list[c]->type) {
++        case PC_TYPE_PASSWORD:
++            SAFEALIGN_SET_UINT32(&d[rp],
++                                 strlen(pc_list[c]->data.password.prompt), &rp);
++            safealign_memcpy(&d[rp], pc_list[c]->data.password.prompt,
++                             strlen(pc_list[c]->data.password.prompt), &rp);
++            break;
++        case PC_TYPE_2FA:
++            SAFEALIGN_SET_UINT32(&d[rp],
++                                 strlen(pc_list[c]->data.two_fa.prompt_1st),
++                                 &rp);
++            safealign_memcpy(&d[rp], pc_list[c]->data.two_fa.prompt_1st,
++                             strlen(pc_list[c]->data.two_fa.prompt_1st), &rp);
++            SAFEALIGN_SET_UINT32(&d[rp],
++                                 strlen(pc_list[c]->data.two_fa.prompt_2nd),
++                                 &rp);
++            safealign_memcpy(&d[rp], pc_list[c]->data.two_fa.prompt_2nd,
++                             strlen(pc_list[c]->data.two_fa.prompt_2nd), &rp);
++            break;
++        case PC_TYPE_2FA_SINGLE:
++            SAFEALIGN_SET_UINT32(&d[rp],
++                                 strlen(pc_list[c]->data.two_fa_single.prompt),
++                                 &rp);
++            safealign_memcpy(&d[rp], pc_list[c]->data.two_fa_single.prompt,
++                             strlen(pc_list[c]->data.two_fa_single.prompt),
++                             &rp);
++            break;
++        case PC_TYPE_SC_PIN:
++            break;
++        default:
++            free(d);
++            return EINVAL;
++        }
++    }
++
++    if (rp != l) {
++        free(d);
++        return EFAULT;
++    }
++
++    *data = d;
++    *len = l;
++
++    return EOK;
++}
++
++errno_t pc_list_from_response(int size, uint8_t *buf,
++                              struct prompt_config ***pc_list)
++{
++    int ret;
++    uint32_t count;
++    uint32_t type;
++    uint32_t l;
++    size_t rp;
++    size_t c;
++    struct prompt_config **pl = NULL;
++    char *str;
++    char *str2;
++
++    if (buf == NULL || size < 3 * sizeof(uint32_t)) {
++        return EINVAL;
++    }
++
++    rp = 0;
++    SAFEALIGN_COPY_UINT32_CHECK(&count, buf + rp, size, &rp);
++
++    for (c = 0; c < count; c++) {
++        /* Since we already know size < 3 * sizeof(uint32_t) this check should
++         * be safe and without over- or underflow. */
++        if (rp > size - sizeof(uint32_t)) {
++            ret = EINVAL;
++            goto done;
++        }
++        SAFEALIGN_COPY_UINT32(&type, buf + rp, &rp);
++
++        switch (type) {
++        case PC_TYPE_PASSWORD:
++            if (rp > size - sizeof(uint32_t)) {
++                ret = EINVAL;
++                goto done;
++            }
++            SAFEALIGN_COPY_UINT32(&l, buf + rp, &rp);
++
++            if (l > size || rp > size - l) {
++                ret = EINVAL;
++                goto done;
++            }
++            str = strndup((char *) buf + rp, l);
++            if (str == NULL) {
++                ret = ENOMEM;
++                goto done;
++            }
++            rp += l;
++
++            ret = pc_list_add_password(&pl, str);
++            free(str);
++            if (ret != EOK) {
++                goto done;
++            }
++            break;
++        case PC_TYPE_2FA:
++            if (rp > size - sizeof(uint32_t)) {
++                ret = EINVAL;
++                goto done;
++            }
++            SAFEALIGN_COPY_UINT32(&l, buf + rp, &rp);
++
++            if (l > size || rp > size - l) {
++                ret = EINVAL;
++                goto done;
++            }
++            str = strndup((char *) buf + rp, l);
++            if (str == NULL) {
++                ret = ENOMEM;
++                goto done;
++            }
++            rp += l;
++
++            if (rp > size - sizeof(uint32_t)) {
++                free(str);
++                ret = EINVAL;
++                goto done;
++            }
++            SAFEALIGN_COPY_UINT32(&l, buf + rp, &rp);
++
++            if (l > size || rp > size - l) {
++                free(str);
++                ret = EINVAL;
++                goto done;
++            }
++            str2 = strndup((char *) buf + rp, l);
++            if (str2 == NULL) {
++                free(str);
++                ret = ENOMEM;
++                goto done;
++            }
++            rp += l;
++
++            ret = pc_list_add_2fa(&pl, str, str2);
++            free(str);
++            free(str2);
++            if (ret != EOK) {
++                goto done;
++            }
++            break;
++        case PC_TYPE_2FA_SINGLE:
++            if (rp > size - sizeof(uint32_t)) {
++                ret = EINVAL;
++                goto done;
++            }
++            SAFEALIGN_COPY_UINT32(&l, buf + rp, &rp);
++
++            if (l > size || rp > size - l) {
++                ret = EINVAL;
++                goto done;
++            }
++            str = strndup((char *) buf + rp, l);
++            if (str == NULL) {
++                ret = ENOMEM;
++                goto done;
++            }
++            rp += l;
++
++            ret = pc_list_add_2fa_single(&pl, str);
++            free(str);
++            if (ret != EOK) {
++                goto done;
++            }
++            break;
++        case PC_TYPE_SC_PIN:
++            break;
++        default:
++            ret = EINVAL;
++            goto done;
++        }
++    }
++
++    *pc_list = pl;
++
++    ret = EOK;
++
++done:
++    if (ret != EOK) {
++        pc_list_free(pl);
++    }
++
++    return ret;
++}
+diff --git a/src/sss_client/sss_cli.h b/src/sss_client/sss_cli.h
+index 24d28ed4b..7e748c281 100644
+--- a/src/sss_client/sss_cli.h
++++ b/src/sss_client/sss_cli.h
+@@ -561,6 +561,35 @@ enum user_info_type {
+  * @}
+  */ /* end of group sss_pam_cli */
+ 
++
++enum prompt_config_type {
++    PC_TYPE_INVALID = 0,
++    PC_TYPE_PASSWORD,
++    PC_TYPE_2FA,
++    PC_TYPE_2FA_SINGLE,
++    PC_TYPE_SC_PIN,
++    PC_TYPE_LAST
++};
++
++struct prompt_config;
++
++enum prompt_config_type pc_get_type(struct prompt_config *pc);
++const char *pc_get_password_prompt(struct prompt_config *pc);
++const char *pc_get_2fa_1st_prompt(struct prompt_config *pc);
++const char *pc_get_2fa_2nd_prompt(struct prompt_config *pc);
++const char *pc_get_2fa_single_prompt(struct prompt_config *pc);
++void pc_list_free(struct prompt_config **pc_list);
++errno_t pc_list_add_password(struct prompt_config ***pc_list,
++                             const char *prompt);
++errno_t pc_list_add_2fa(struct prompt_config ***pc_list,
++                        const char *prompt_1st, const char *prompt_2nd);
++errno_t pc_list_add_2fa_single(struct prompt_config ***pc_list,
++                               const char *prompt);
++errno_t pam_get_response_prompt_config(struct prompt_config **pc_list, int *len,
++                                       uint8_t **data);
++errno_t pc_list_from_response(int size, uint8_t *buf,
++                              struct prompt_config ***pc_list);
++
+ enum sss_netgr_rep_type {
+     SSS_NETGR_REP_TRIPLE = 1,
+     SSS_NETGR_REP_GROUP
+diff --git a/src/tests/cmocka/test_prompt_config.c b/src/tests/cmocka/test_prompt_config.c
+new file mode 100644
+index 000000000..0b761ae4c
+--- /dev/null
++++ b/src/tests/cmocka/test_prompt_config.c
+@@ -0,0 +1,215 @@
++/*
++    SSSD
++
++    prompt config - Utilities tests
++
++    Authors:
++        Sumit bose <sbose@redhat.com>
++
++    Copyright (C) 2019 Red Hat
++
++    This program is free software; you can redistribute it and/or modify
++    it under the terms of the GNU General Public License as published by
++    the Free Software Foundation; either version 3 of the License, or
++    (at your option) any later version.
++
++    This program is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU General Public License for more details.
++
++    You should have received a copy of the GNU General Public License
++    along with this program.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#include <string.h>
++#include <popt.h>
++
++#include "tests/cmocka/common_mock.h"
++
++#include "sss_client/sss_cli.h"
++
++void test_pc_list_add_password(void **state)
++{
++    int ret;
++    struct prompt_config **pc_list = NULL;
++
++    ret = pc_list_add_password(&pc_list, "Hello");
++    assert_int_equal(ret, EOK);
++    assert_non_null(pc_list);
++    assert_non_null(pc_list[0]);
++    assert_int_equal(PC_TYPE_PASSWORD, pc_get_type(pc_list[0]));
++    assert_string_equal("Hello", pc_get_password_prompt(pc_list[0]));
++    assert_null(pc_list[1]);
++
++    ret = pc_list_add_password(&pc_list, "Hello2");
++    assert_int_equal(ret, EOK);
++    assert_non_null(pc_list);
++    assert_non_null(pc_list[0]);
++    assert_int_equal(PC_TYPE_PASSWORD, pc_get_type(pc_list[0]));
++    assert_string_equal("Hello", pc_get_password_prompt(pc_list[0]));
++    assert_non_null(pc_list[1]);
++    assert_int_equal(PC_TYPE_PASSWORD, pc_get_type(pc_list[1]));
++    assert_string_equal("Hello2", pc_get_password_prompt(pc_list[1]));
++    assert_null(pc_list[2]);
++
++    pc_list_free(pc_list);
++}
++
++void test_pc_list_add_2fa_single(void **state)
++{
++    int ret;
++    struct prompt_config **pc_list = NULL;
++
++    ret = pc_list_add_2fa_single(&pc_list, "Hello");
++    assert_int_equal(ret, EOK);
++    assert_non_null(pc_list);
++    assert_non_null(pc_list[0]);
++    assert_int_equal(PC_TYPE_2FA_SINGLE, pc_get_type(pc_list[0]));
++    assert_string_equal("Hello", pc_get_2fa_single_prompt(pc_list[0]));
++    assert_null(pc_list[1]);
++
++    ret = pc_list_add_2fa_single(&pc_list, "Hello2");
++    assert_int_equal(ret, EOK);
++    assert_non_null(pc_list);
++    assert_non_null(pc_list[0]);
++    assert_int_equal(PC_TYPE_2FA_SINGLE, pc_get_type(pc_list[0]));
++    assert_string_equal("Hello", pc_get_2fa_single_prompt(pc_list[0]));
++    assert_non_null(pc_list[1]);
++    assert_int_equal(PC_TYPE_2FA_SINGLE, pc_get_type(pc_list[1]));
++    assert_string_equal("Hello2", pc_get_2fa_single_prompt(pc_list[1]));
++    assert_null(pc_list[2]);
++
++    pc_list_free(pc_list);
++}
++
++void test_pc_list_add_2fa(void **state)
++{
++    int ret;
++    struct prompt_config **pc_list = NULL;
++
++    ret = pc_list_add_2fa(&pc_list, "Hello", "Good Bye");
++    assert_int_equal(ret, EOK);
++    assert_non_null(pc_list);
++    assert_non_null(pc_list[0]);
++    assert_int_equal(PC_TYPE_2FA, pc_get_type(pc_list[0]));
++    assert_string_equal("Hello", pc_get_2fa_1st_prompt(pc_list[0]));
++    assert_string_equal("Good Bye", pc_get_2fa_2nd_prompt(pc_list[0]));
++    assert_null(pc_list[1]);
++
++    pc_list_free(pc_list);
++}
++
++void test_pam_get_response_prompt_config(void **state)
++{
++    int ret;
++    struct prompt_config **pc_list = NULL;
++    int len;
++    uint8_t *data;
++
++    ret = pc_list_add_password(&pc_list, "password");
++    assert_int_equal(ret, EOK);
++
++    ret = pc_list_add_2fa(&pc_list, "first", "second");
++    assert_int_equal(ret, EOK);
++
++    ret = pc_list_add_2fa_single(&pc_list, "single");
++    assert_int_equal(ret, EOK);
++
++    ret = pam_get_response_prompt_config(pc_list, &len, &data);
++    pc_list_free(pc_list);
++    assert_int_equal(ret, EOK);
++    assert_int_equal(len, 57);
++
++#if __BYTE_ORDER == __LITTLE_ENDIAN
++    assert_memory_equal(data, "\3\0\0\0\1\0\0\0\10\0\0\0" "password\2\0\0\0\5\0\0\0" "first\6\0\0\0" "second\3\0\0\0\6\0\0\0" "single", len);
++#else
++    assert_memory_equal(data, "\0\0\0\3\0\0\0\1\0\0\0\10" "password\0\0\0\2\0\0\0\5" "first\0\0\0\6" "second\0\0\0\3\0\0\0\6" "single", len);
++#endif
++
++    free(data);
++}
++
++void test_pc_list_from_response(void **state)
++{
++    int ret;
++    struct prompt_config **pc_list = NULL;
++    int len;
++    uint8_t *data;
++
++    ret = pc_list_add_password(&pc_list, "password");
++    assert_int_equal(ret, EOK);
++
++    ret = pc_list_add_2fa(&pc_list, "first", "second");
++    assert_int_equal(ret, EOK);
++
++    ret = pc_list_add_2fa_single(&pc_list, "single");
++    assert_int_equal(ret, EOK);
++
++    ret = pam_get_response_prompt_config(pc_list, &len, &data);
++    pc_list_free(pc_list);
++    assert_int_equal(ret, EOK);
++    assert_int_equal(len, 57);
++
++    pc_list = NULL;
++
++    ret = pc_list_from_response(len, data, &pc_list);
++    free(data);
++    assert_int_equal(ret, EOK);
++    assert_non_null(pc_list);
++
++    assert_non_null(pc_list[0]);
++    assert_int_equal(PC_TYPE_PASSWORD, pc_get_type(pc_list[0]));
++    assert_string_equal("password", pc_get_password_prompt(pc_list[0]));
++
++    assert_non_null(pc_list[1]);
++    assert_int_equal(PC_TYPE_2FA, pc_get_type(pc_list[1]));
++    assert_string_equal("first", pc_get_2fa_1st_prompt(pc_list[1]));
++    assert_string_equal("second", pc_get_2fa_2nd_prompt(pc_list[1]));
++
++    assert_non_null(pc_list[2]);
++    assert_int_equal(PC_TYPE_2FA_SINGLE, pc_get_type(pc_list[2]));
++    assert_string_equal("single", pc_get_2fa_single_prompt(pc_list[2]));
++
++    assert_null(pc_list[3]);
++
++    pc_list_free(pc_list);
++}
++
++int main(int argc, const char *argv[])
++{
++    poptContext pc;
++    int opt;
++    struct poptOption long_options[] = {
++        POPT_AUTOHELP
++        SSSD_DEBUG_OPTS
++        POPT_TABLEEND
++    };
++
++    const struct CMUnitTest tests[] = {
++        cmocka_unit_test(test_pc_list_add_password),
++        cmocka_unit_test(test_pc_list_add_2fa_single),
++        cmocka_unit_test(test_pc_list_add_2fa),
++        cmocka_unit_test(test_pam_get_response_prompt_config),
++        cmocka_unit_test(test_pc_list_from_response),
++    };
++
++    /* Set debug level to invalid value so we can decide if -d 0 was used. */
++    debug_level = SSSDBG_INVALID;
++
++    pc = poptGetContext(argv[0], argc, argv, long_options, 0);
++    while((opt = poptGetNextOpt(pc)) != -1) {
++        switch(opt) {
++        default:
++            fprintf(stderr, "\nInvalid option %s: %s\n\n",
++                    poptBadOption(pc, 0), poptStrerror(opt));
++            poptPrintUsage(pc, stderr, 0);
++            return 1;
++        }
++    }
++    poptFreeContext(pc);
++
++    DEBUG_CLI_INIT(debug_level);
++
++    return cmocka_run_group_tests(tests, NULL, NULL);
++}
+-- 
+2.19.1
+

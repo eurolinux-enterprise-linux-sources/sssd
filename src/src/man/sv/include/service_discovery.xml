@@ -1,20 +1,20 @@
 <refsect1 id='service_discovery'>
-    <title>SERVICE DISCOVERY</title>
+    <title>TJÄNSTEUPPTÄCKT</title>
     <para>
-        The service discovery feature allows back ends to automatically find the
-appropriate servers to connect to using a special DNS query. This feature is
-not supported for backup servers.
+        Tjänsteupptäcktsfunktionen gör att bakändar automatiskt kan hitta en lämplig
+server att ansluta till med en speciell DNS-fråga.  Denna funktion stödjs
+inte för backup-servrar.
     </para>
     <refsect2 id='configuration'>
         <title>Configuration</title>
         <para>
-            If no servers are specified, the back end automatically uses service
-discovery to try to find a server. Optionally, the user may choose to use
-both fixed server addresses and service discovery by inserting a special
-keyword, <quote>_srv_</quote>, in the list of servers. The order of
-preference is maintained. This feature is useful if, for example, the user
-prefers to use service discovery whenever possible, and fall back to a
-specific server when no servers can be discovered using DNS.
+            Om inga servrar anges använder bakänden automatiskt tjänsteupptäckt för att
+försöka hitta en server.  Användaren kan om så önskas välja att använda både
+en bestämd serveradress och tjänsteupptäckt genom att infoga ett speciellt
+nyckelord, <quote>_srv_</quote>, i listan av servrar.  Prefernsordningen
+bibehålls.  Denna funktion är användbar om, till exempel, användaren
+föredrar att använda tjänsteupptäckt närhelst det är möjligt, och falla
+tillbaka på en specifik server när inga servrar kan upptäckas med DNS.
         </para>
     </refsect2>
     <refsect2 id='domain_name'>
@@ -33,9 +33,9 @@ in respective option description.
         </para>
     </refsect2>
     <refsect2 id='reference'>
-        <title>See Also</title>
+        <title>Se även</title>
         <para>
-            For more information on the service discovery mechanism, refer to RFC 2782.
+            För mer information om tjänsteupptäcktsmekanismen, se RFC 2782.
         </para>
     </refsect2>
 </refsect1>

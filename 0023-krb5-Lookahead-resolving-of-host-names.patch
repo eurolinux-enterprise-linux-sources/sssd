@@ -1,0 +1,650 @@
+From 385c8c7e0e6f184dd61953745bfe04a5a79a951a Mon Sep 17 00:00:00 2001
+From: Tomas Halman <thalman@redhat.com>
+Date: Fri, 15 Mar 2019 10:27:50 +0100
+Subject: [PATCH 23/23] krb5: Lookahead resolving of host names
+
+The caller that initializes
+the fail over service (maybe with be_fo_add_service) should provide
+a hint with the value of the lookahead option. Then, if a request for
+server resolution is triggered, the fail over code would resolve a server
+and afterwards check if enough fo_server entries with a valid hostname
+in the struct server_common structure. If not, the request would
+check if any of the fo_server structures represents a SRV query and
+try to resolve the query to receive more host names.
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3975
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit e8d806d9bbb1ba288ed6a83158113f4d8f8a8929)
+---
+ Makefile.am                               |  1 +
+ src/man/sssd-krb5.5.xml                   | 34 +++++++++++
+ src/providers/ad/ad_common.c              | 10 +++-
+ src/providers/ad/ad_common.h              |  2 +
+ src/providers/ad/ad_init.c                |  2 +
+ src/providers/ad/ad_opts.c                |  2 +
+ src/providers/ad/ad_subdomains.c          | 12 +++-
+ src/providers/ipa/ipa_common.c            | 14 +++--
+ src/providers/ipa/ipa_opts.c              |  2 +
+ src/providers/ipa/ipa_subdomains.c        |  4 +-
+ src/providers/ipa/ipa_subdomains_server.c |  7 +++
+ src/providers/krb5/krb5_common.c          | 71 ++++++++++++++++++++++-
+ src/providers/krb5/krb5_common.h          | 13 ++++-
+ src/providers/krb5/krb5_init.c            | 19 +++++-
+ src/providers/krb5/krb5_opts.c            |  1 +
+ src/providers/ldap/ldap_common.c          |  9 +++
+ src/providers/ldap/ldap_opts.c            |  1 +
+ src/providers/ldap/sdap.h                 |  1 +
+ 18 files changed, 193 insertions(+), 12 deletions(-)
+
+diff --git a/Makefile.am b/Makefile.am
+index e22423071..0c24ae664 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -3339,6 +3339,7 @@ test_ad_subdom_LDADD = \
+     libsss_idmap.la \
+     libsss_test_common.la \
+     libdlopen_test_providers.la \
++    libsss_krb5_common.la \
+     $(NULL)
+ 
+ test_ipa_subdom_util_SOURCES = \
+diff --git a/src/man/sssd-krb5.5.xml b/src/man/sssd-krb5.5.xml
+index 60b7dfb50..5a0bb5e9c 100644
+--- a/src/man/sssd-krb5.5.xml
++++ b/src/man/sssd-krb5.5.xml
+@@ -501,6 +501,40 @@
+                     </listitem>
+                 </varlistentry>
+ 
++                <varlistentry>
++                    <term>krb5_kdcinfo_lookahead (string)</term>
++                    <listitem>
++                        <para>
++                            When krb5_use_kdcinfo is set to true, you can limit the amount
++                            of servers handed to
++                            <citerefentry>
++                                <refentrytitle>sssd_krb5_locator_plugin</refentrytitle>
++                                <manvolnum>8</manvolnum>
++                            </citerefentry>.
++                            This might be helpful when there are too many servers
++                            discovered using SRV record.
++                        </para>
++                        <para>
++                            The krb5_kdcinfo_lookahead option contains two
++                            numbers seperated by a colon. The first number represents
++                            number of primary servers used and the second number
++                            specifies the number of backup servers.
++                        </para>
++                        <para>
++                            For example <emphasis>10:0</emphasis> means that up to
++                            10 primary servers will be handed to
++                            <citerefentry>
++                                <refentrytitle>sssd_krb5_locator_plugin</refentrytitle>
++                                <manvolnum>8</manvolnum>
++                            </citerefentry>.
++                            but no backup servers.
++                        </para>
++                        <para>
++                            Default: 3:1
++                        </para>
++                    </listitem>
++                </varlistentry>
++
+                 <varlistentry>
+                     <term>krb5_use_enterprise_principal (boolean)</term>
+                     <listitem>
+diff --git a/src/providers/ad/ad_common.c b/src/providers/ad/ad_common.c
+index b7f34daa9..4d1800806 100644
+--- a/src/providers/ad/ad_common.c
++++ b/src/providers/ad/ad_common.c
+@@ -729,6 +729,8 @@ ad_failover_init(TALLOC_CTX *mem_ctx, struct be_ctx *bectx,
+                  const char *ad_gc_service,
+                  const char *ad_domain,
+                  bool use_kdcinfo,
++                 size_t n_lookahead_primary,
++                 size_t n_lookahead_backup,
+                  struct ad_service **_service)
+ {
+     errno_t ret;
+@@ -760,7 +762,9 @@ ad_failover_init(TALLOC_CTX *mem_ctx, struct be_ctx *bectx,
+ 
+     service->krb5_service = krb5_service_new(service, bectx,
+                                              ad_service, krb5_realm,
+-                                             use_kdcinfo);
++                                             use_kdcinfo,
++                                             n_lookahead_primary,
++                                             n_lookahead_backup);
+     if (!service->krb5_service) {
+         ret = ENOMEM;
+         goto done;
+@@ -1292,6 +1296,10 @@ ad_get_auth_options(TALLOC_CTX *mem_ctx,
+     DEBUG(SSSDBG_CONF_SETTINGS, "Option %s set to %s\n",
+           krb5_options[KRB5_USE_KDCINFO].opt_name,
+           ad_opts->service->krb5_service->write_kdcinfo ? "true" : "false");
++    sss_krb5_parse_lookahead(
++        dp_opt_get_string(krb5_options, KRB5_KDCINFO_LOOKAHEAD),
++        &ad_opts->service->krb5_service->lookahead_primary,
++        &ad_opts->service->krb5_service->lookahead_backup);
+ 
+     *_opts = talloc_steal(mem_ctx, krb5_options);
+ 
+diff --git a/src/providers/ad/ad_common.h b/src/providers/ad/ad_common.h
+index 529753a8a..638465958 100644
+--- a/src/providers/ad/ad_common.h
++++ b/src/providers/ad/ad_common.h
+@@ -147,6 +147,8 @@ ad_failover_init(TALLOC_CTX *mem_ctx, struct be_ctx *ctx,
+                  const char *ad_gc_service,
+                  const char *ad_domain,
+                  bool use_kdcinfo,
++                 size_t n_lookahead_primary,
++                 size_t n_lookahead_backup,
+                  struct ad_service **_service);
+ 
+ errno_t
+diff --git a/src/providers/ad/ad_init.c b/src/providers/ad/ad_init.c
+index 637efb761..612d4587e 100644
+--- a/src/providers/ad/ad_init.c
++++ b/src/providers/ad/ad_init.c
+@@ -160,6 +160,8 @@ static errno_t ad_init_options(TALLOC_CTX *mem_ctx,
+                            ad_realm, AD_SERVICE_NAME, AD_GC_SERVICE_NAME,
+                            dp_opt_get_string(ad_options->basic, AD_DOMAIN),
+                            false, /* will be set in ad_get_auth_options() */
++                           (size_t) -1,
++                           (size_t) -1,
+                            &ad_options->service);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_FATAL_FAILURE, "Failed to init AD failover service: "
+diff --git a/src/providers/ad/ad_opts.c b/src/providers/ad/ad_opts.c
+index c408295f3..652d8bb27 100644
+--- a/src/providers/ad/ad_opts.c
++++ b/src/providers/ad/ad_opts.c
+@@ -111,6 +111,7 @@ struct dp_option ad_def_ldap_opts[] = {
+     { "krb5_realm", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "krb5_canonicalize", DP_OPT_BOOL, BOOL_FALSE, BOOL_FALSE },
+     { "krb5_use_kdcinfo", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
++    { "krb5_kdcinfo_lookahead", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "ldap_pwd_policy", DP_OPT_STRING, { "none" }, NULL_STRING },
+     { "ldap_referrals", DP_OPT_BOOL, BOOL_FALSE, BOOL_FALSE },
+     { "account_cache_expiration", DP_OPT_NUMBER, { .number = 0 }, NULL_NUMBER },
+@@ -175,6 +176,7 @@ struct dp_option ad_def_krb5_opts[] = {
+     { "krb5_canonicalize", DP_OPT_BOOL, BOOL_FALSE, BOOL_FALSE },
+     { "krb5_use_enterprise_principal", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
+     { "krb5_use_kdcinfo", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
++    { "krb5_kdcinfo_lookahead", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "krb5_map_user", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     DP_OPTION_TERMINATOR
+ };
+diff --git a/src/providers/ad/ad_subdomains.c b/src/providers/ad/ad_subdomains.c
+index 4fc4be094..b4ad347e4 100644
+--- a/src/providers/ad/ad_subdomains.c
++++ b/src/providers/ad/ad_subdomains.c
+@@ -280,6 +280,8 @@ ad_subdom_ad_ctx_new(struct be_ctx *be_ctx,
+     const char *keytab;
+     char *subdom_conf_path;
+     bool use_kdcinfo = false;
++    size_t n_lookahead_primary = SSS_KRB5_LOOKAHEAD_PRIMARY_DEFAULT;
++    size_t n_lookahead_backup = SSS_KRB5_LOOKAHEAD_BACKUP_DEFAULT;
+ 
+     realm = dp_opt_get_cstring(id_ctx->ad_options->basic, AD_KRB5_REALM);
+     hostname = dp_opt_get_cstring(id_ctx->ad_options->basic, AD_HOSTNAME);
+@@ -331,6 +333,11 @@ ad_subdom_ad_ctx_new(struct be_ctx *be_ctx,
+             && id_ctx->ad_options->auth_ctx->opts != NULL) {
+         use_kdcinfo = dp_opt_get_bool(id_ctx->ad_options->auth_ctx->opts,
+                                       KRB5_USE_KDCINFO);
++        sss_krb5_parse_lookahead(
++            dp_opt_get_string(id_ctx->ad_options->auth_ctx->opts,
++                              KRB5_KDCINFO_LOOKAHEAD),
++            &n_lookahead_primary,
++            &n_lookahead_backup);
+     }
+ 
+     DEBUG(SSSDBG_TRACE_ALL,
+@@ -339,7 +346,10 @@ ad_subdom_ad_ctx_new(struct be_ctx *be_ctx,
+ 
+     ret = ad_failover_init(ad_options, be_ctx, servers, backup_servers,
+                            subdom->realm, service_name, gc_service_name,
+-                           subdom->name, use_kdcinfo, &ad_options->service);
++                           subdom->name, use_kdcinfo,
++                           n_lookahead_primary,
++                           n_lookahead_backup,
++                           &ad_options->service);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_OP_FAILURE, "Cannot initialize AD failover\n");
+         talloc_free(ad_options);
+diff --git a/src/providers/ipa/ipa_common.c b/src/providers/ipa/ipa_common.c
+index 1ed2e2203..871fb9bbc 100644
+--- a/src/providers/ipa/ipa_common.c
++++ b/src/providers/ipa/ipa_common.c
+@@ -801,6 +801,12 @@ int ipa_get_auth_options(struct ipa_options *ipa_opts,
+     DEBUG(SSSDBG_CONF_SETTINGS, "Option %s set to %s\n",
+           ipa_opts->auth[KRB5_USE_KDCINFO].opt_name,
+           ipa_opts->service->krb5_service->write_kdcinfo ? "true" : "false");
++    if (ipa_opts->service->krb5_service->write_kdcinfo) {
++        sss_krb5_parse_lookahead(
++            dp_opt_get_string(ipa_opts->auth, KRB5_KDCINFO_LOOKAHEAD),
++            &ipa_opts->service->krb5_service->lookahead_primary,
++            &ipa_opts->service->krb5_service->lookahead_backup);
++    }
+ 
+     *_opts = ipa_opts->auth;
+     ret = EOK;
+@@ -1022,10 +1028,10 @@ int ipa_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+ 
+     service->krb5_service = krb5_service_new(service, ctx,
+                                              "IPA", realm,
+-                                             true); /* The configured value
+-                                                     * will be set later when
+-                                                     * the auth provider is set up
+-                                                     */
++                                             true,   /* The configured value */
++                                             0,      /* will be set later when */
++                                             0);     /* the auth provider is set up */
++
+     if (!service->krb5_service) {
+         ret = ENOMEM;
+         goto done;
+diff --git a/src/providers/ipa/ipa_opts.c b/src/providers/ipa/ipa_opts.c
+index 373dc0e53..600b9ec4b 100644
+--- a/src/providers/ipa/ipa_opts.c
++++ b/src/providers/ipa/ipa_opts.c
+@@ -121,6 +121,7 @@ struct dp_option ipa_def_ldap_opts[] = {
+     { "krb5_realm", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "krb5_canonicalize", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
+     { "krb5_use_kdcinfo", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
++    { "krb5_kdcinfo_lookahead", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "ldap_pwd_policy", DP_OPT_STRING, { "none" } , NULL_STRING },
+     { "ldap_referrals", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
+     { "account_cache_expiration", DP_OPT_NUMBER, { .number = 0 }, NULL_NUMBER },
+@@ -320,6 +321,7 @@ struct dp_option ipa_def_krb5_opts[] = {
+     { "krb5_canonicalize", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
+     { "krb5_use_enterprise_principal", DP_OPT_BOOL, BOOL_FALSE, BOOL_FALSE },
+     { "krb5_use_kdcinfo", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
++    { "krb5_kdcinfo_lookahead", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "krb5_map_user", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     DP_OPTION_TERMINATOR
+ };
+diff --git a/src/providers/ipa/ipa_subdomains.c b/src/providers/ipa/ipa_subdomains.c
+index da1279e3e..94365aaca 100644
+--- a/src/providers/ipa/ipa_subdomains.c
++++ b/src/providers/ipa/ipa_subdomains.c
+@@ -692,7 +692,9 @@ ipa_subdom_get_k5_svc(struct ipa_subdomains_ctx *ctx,
+                                         ctx->be_ctx,
+                                         "IPA",
+                                         dom->realm,
+-                                        use_kdcinfo);
++                                        use_kdcinfo,
++                                        (size_t) -1,
++                                        (size_t) -1);
+     if (k5svc_ent->k5svc == NULL) {
+         talloc_free(k5svc_ent);
+         return NULL;
+diff --git a/src/providers/ipa/ipa_subdomains_server.c b/src/providers/ipa/ipa_subdomains_server.c
+index 43a3053cb..dd0933642 100644
+--- a/src/providers/ipa/ipa_subdomains_server.c
++++ b/src/providers/ipa/ipa_subdomains_server.c
+@@ -225,6 +225,8 @@ ipa_ad_ctx_new(struct be_ctx *be_ctx,
+     errno_t ret;
+     const char *extra_attrs;
+     bool use_kdcinfo = false;
++    size_t n_lookahead_primary = (size_t)-1;
++    size_t n_lookahead_backup = (size_t)-1;
+ 
+     ad_domain = subdom->name;
+     DEBUG(SSSDBG_TRACE_LIBS, "Setting up AD subdomain %s\n", subdom->name);
+@@ -284,6 +286,10 @@ ipa_ad_ctx_new(struct be_ctx *be_ctx,
+     if (id_ctx->ipa_options != NULL && id_ctx->ipa_options->auth != NULL) {
+         use_kdcinfo = dp_opt_get_bool(id_ctx->ipa_options->auth,
+                                       KRB5_USE_KDCINFO);
++        sss_krb5_parse_lookahead(
++            dp_opt_get_string(id_ctx->ipa_options->auth, KRB5_KDCINFO_LOOKAHEAD),
++            &n_lookahead_primary,
++            &n_lookahead_backup);
+     }
+ 
+     DEBUG(SSSDBG_TRACE_ALL,
+@@ -297,6 +303,7 @@ ipa_ad_ctx_new(struct be_ctx *be_ctx,
+                            subdom->realm,
+                            service_name, gc_service_name,
+                            subdom->name, use_kdcinfo,
++                           n_lookahead_primary, n_lookahead_backup,
+                            &ad_options->service);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_OP_FAILURE, "Cannot initialize AD failover\n");
+diff --git a/src/providers/krb5/krb5_common.c b/src/providers/krb5/krb5_common.c
+index 1e33fc0f5..e56820b8d 100644
+--- a/src/providers/krb5/krb5_common.c
++++ b/src/providers/krb5/krb5_common.c
+@@ -390,6 +390,39 @@ done:
+     return ret;
+ }
+ 
++void sss_krb5_parse_lookahead(const char *param, size_t *primary, size_t *backup)
++{
++    int ret;
++
++    if (primary == NULL || backup == NULL) {
++        return;
++    }
++
++    *primary = SSS_KRB5_LOOKAHEAD_PRIMARY_DEFAULT;
++    *backup = SSS_KRB5_LOOKAHEAD_BACKUP_DEFAULT;
++
++    if (param == NULL) {
++        return;
++    }
++
++    if (strchr(param, ':')) {
++        ret = sscanf(param, "%zu:%zu", primary, backup);
++        if (ret != 2) {
++            DEBUG(SSSDBG_MINOR_FAILURE, "Could not parse krb5_kdcinfo_lookahead!\n");
++        }
++    } else {
++        ret = sscanf(param, "%zu", primary);
++        if (ret != 1) {
++            DEBUG(SSSDBG_MINOR_FAILURE, "Could not parse krb5_kdcinfo_lookahead!\n");
++        }
++    }
++
++    DEBUG(SSSDBG_CONF_SETTINGS,
++          "Option krb5_kdcinfo_lookahead set to %zu:%zu",
++          *primary, *backup);
++}
++
++
+ static int remove_info_files_destructor(void *p)
+ {
+     int ret;
+@@ -668,6 +701,13 @@ errno_t write_krb5info_file_from_fo_server(struct krb5_service *krb5_service,
+     int primary;
+     const char *address;
+     errno_t ret;
++    size_t n_lookahead_primary;
++    size_t n_lookahead_backup;
++
++    if (krb5_service == NULL) {
++        DEBUG(SSSDBG_CRIT_FAILURE, "The krb5_service must not be NULL!\n");
++        return EINVAL;
++    }
+ 
+     tmp_ctx = talloc_new(NULL);
+     if (tmp_ctx == NULL) {
+@@ -675,6 +715,9 @@ errno_t write_krb5info_file_from_fo_server(struct krb5_service *krb5_service,
+         return ENOMEM;
+     }
+ 
++    n_lookahead_primary = krb5_service->lookahead_primary;
++    n_lookahead_backup = krb5_service->lookahead_backup;
++
+     server_idx = 0;
+     server_list = talloc_zero_array(tmp_ctx,
+                                     const char *,
+@@ -689,6 +732,15 @@ errno_t write_krb5info_file_from_fo_server(struct krb5_service *krb5_service,
+         address = fo_server_address_or_name(tmp_ctx, server);
+         if (address) {
+             server_list[server_idx++] = address;
++            if (fo_is_server_primary(server)) {
++                if (n_lookahead_primary > 0) {
++                    n_lookahead_primary--;
++                }
++            } else {
++                if (n_lookahead_backup > 0) {
++                    n_lookahead_backup--;
++                }
++            }
+         } else {
+             DEBUG(SSSDBG_CRIT_FAILURE,
+                   "Server without name and address found in list.\n");
+@@ -700,6 +752,8 @@ errno_t write_krb5info_file_from_fo_server(struct krb5_service *krb5_service,
+              item != server;
+              item = fo_server_next(item) ? fo_server_next(item) : fo_server_first(item)) {
+ 
++            if (primary && n_lookahead_primary == 0) break;
++            if (!primary && n_lookahead_backup == 0) break;
+             if (primary && !fo_is_server_primary(item)) continue;
+             if (!primary && fo_is_server_primary(item)) continue;
+             if (filter != NULL && filter(item)) continue;
+@@ -712,6 +766,11 @@ errno_t write_krb5info_file_from_fo_server(struct krb5_service *krb5_service,
+             }
+ 
+             server_list[server_idx++] = address;
++            if (primary) {
++                n_lookahead_primary--;
++            } else {
++                n_lookahead_backup--;
++            }
+         }
+     }
+     if (server_list[0] == NULL) {
+@@ -901,7 +960,9 @@ struct krb5_service *krb5_service_new(TALLOC_CTX *mem_ctx,
+                                       struct be_ctx *be_ctx,
+                                       const char *service_name,
+                                       const char *realm,
+-                                      bool use_kdcinfo)
++                                      bool use_kdcinfo,
++                                      size_t n_lookahead_primary,
++                                      size_t n_lookahead_backup)
+ {
+     struct krb5_service *service;
+ 
+@@ -927,6 +988,9 @@ struct krb5_service *krb5_service_new(TALLOC_CTX *mem_ctx,
+           realm,
+           use_kdcinfo ? "true" : "false");
+     service->write_kdcinfo = use_kdcinfo;
++    service->lookahead_primary = n_lookahead_primary;
++    service->lookahead_backup = n_lookahead_backup;
++
+     service->be_ctx = be_ctx;
+     return service;
+ }
+@@ -937,6 +1001,8 @@ int krb5_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+                       const char *backup_servers,
+                       const char *realm,
+                       bool use_kdcinfo,
++                      size_t n_lookahead_primary,
++                      size_t n_lookahead_backup,
+                       struct krb5_service **_service)
+ {
+     TALLOC_CTX *tmp_ctx;
+@@ -948,7 +1014,8 @@ int krb5_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+         return ENOMEM;
+     }
+ 
+-    service = krb5_service_new(tmp_ctx, ctx, service_name, realm, use_kdcinfo);
++    service = krb5_service_new(tmp_ctx, ctx, service_name, realm, use_kdcinfo,
++                               n_lookahead_primary, n_lookahead_backup);
+     if (!service) {
+         ret = ENOMEM;
+         goto done;
+diff --git a/src/providers/krb5/krb5_common.h b/src/providers/krb5/krb5_common.h
+index be541626b..441c52b34 100644
+--- a/src/providers/krb5/krb5_common.h
++++ b/src/providers/krb5/krb5_common.h
+@@ -38,6 +38,8 @@
+ 
+ #define SSS_KRB5KDC_FO_SRV "KERBEROS"
+ #define SSS_KRB5KPASSWD_FO_SRV "KPASSWD"
++#define SSS_KRB5_LOOKAHEAD_PRIMARY_DEFAULT 3
++#define SSS_KRB5_LOOKAHEAD_BACKUP_DEFAULT 1
+ 
+ enum krb5_opts {
+     KRB5_KDC = 0,
+@@ -59,6 +61,7 @@ enum krb5_opts {
+     KRB5_CANONICALIZE,
+     KRB5_USE_ENTERPRISE_PRINCIPAL,
+     KRB5_USE_KDCINFO,
++    KRB5_KDCINFO_LOOKAHEAD,
+     KRB5_MAP_USER,
+ 
+     KRB5_OPTS
+@@ -71,6 +74,8 @@ struct krb5_service {
+     char *name;
+     char *realm;
+     bool write_kdcinfo;
++    size_t lookahead_primary;
++    size_t lookahead_backup;
+     bool removal_callback_available;
+ };
+ 
+@@ -160,6 +165,8 @@ errno_t krb5_try_kdcip(struct confdb_ctx *cdb, const char *conf_path,
+ errno_t sss_krb5_get_options(TALLOC_CTX *memctx, struct confdb_ctx *cdb,
+                              const char *conf_path, struct dp_option **_opts);
+ 
++void sss_krb5_parse_lookahead(const char *param, size_t *primary, size_t *backup);
++
+ errno_t write_krb5info_file(struct krb5_service *krb5_service,
+                             const char **server_list,
+                             const char *service);
+@@ -173,7 +180,9 @@ struct krb5_service *krb5_service_new(TALLOC_CTX *mem_ctx,
+                                       struct be_ctx *be_ctx,
+                                       const char *service_name,
+                                       const char *realm,
+-                                      bool use_kdcinfo);
++                                      bool use_kdcinfo,
++                                      size_t n_lookahead_primary,
++                                      size_t n_lookahead_backup);
+ 
+ int krb5_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+                       const char *service_name,
+@@ -181,6 +190,8 @@ int krb5_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+                       const char *backup_servers,
+                       const char *realm,
+                       bool use_kdcinfo,
++                      size_t n_lookahead_primary,
++                      size_t n_lookahead_backup,
+                       struct krb5_service **_service);
+ 
+ void remove_krb5_info_files_callback(void *pvt);
+diff --git a/src/providers/krb5/krb5_init.c b/src/providers/krb5/krb5_init.c
+index 66ae68fb4..3f4c1b361 100644
+--- a/src/providers/krb5/krb5_init.c
++++ b/src/providers/krb5/krb5_init.c
+@@ -40,6 +40,8 @@ static errno_t krb5_init_kpasswd(struct krb5_ctx *ctx,
+     const char *backup_servers;
+     const char *kdc_servers;
+     bool use_kdcinfo;
++    size_t n_lookahead_primary;
++    size_t n_lookahead_backup;
+     errno_t ret;
+ 
+     realm = dp_opt_get_string(ctx->opts, KRB5_REALM);
+@@ -52,6 +54,9 @@ static errno_t krb5_init_kpasswd(struct krb5_ctx *ctx,
+     primary_servers = dp_opt_get_string(ctx->opts, KRB5_KPASSWD);
+     backup_servers = dp_opt_get_string(ctx->opts, KRB5_BACKUP_KPASSWD);
+     use_kdcinfo = dp_opt_get_bool(ctx->opts, KRB5_USE_KDCINFO);
++    sss_krb5_parse_lookahead(dp_opt_get_string(ctx->opts, KRB5_KDCINFO_LOOKAHEAD),
++                             &n_lookahead_primary, &n_lookahead_backup);
++
+ 
+     if (primary_servers == NULL && backup_servers != NULL) {
+         DEBUG(SSSDBG_CONF_SETTINGS, "kpasswd server wasn't specified but "
+@@ -67,7 +72,10 @@ static errno_t krb5_init_kpasswd(struct krb5_ctx *ctx,
+     } else {
+         ret = krb5_service_init(ctx, be_ctx, SSS_KRB5KPASSWD_FO_SRV,
+                                 primary_servers, backup_servers, realm,
+-                                use_kdcinfo, &ctx->kpasswd_service);
++                                use_kdcinfo,
++                                n_lookahead_primary,
++                                n_lookahead_backup,
++                                &ctx->kpasswd_service);
+         if (ret != EOK) {
+             DEBUG(SSSDBG_FATAL_FAILURE,
+                   "Failed to init KRB5KPASSWD failover service!\n");
+@@ -84,6 +92,8 @@ static errno_t krb5_init_kdc(struct krb5_ctx *ctx, struct be_ctx *be_ctx)
+     const char *backup_servers;
+     const char *realm;
+     bool use_kdcinfo;
++    size_t n_lookahead_primary;
++    size_t n_lookahead_backup;
+     errno_t ret;
+ 
+     realm = dp_opt_get_string(ctx->opts, KRB5_REALM);
+@@ -96,10 +106,15 @@ static errno_t krb5_init_kdc(struct krb5_ctx *ctx, struct be_ctx *be_ctx)
+     backup_servers = dp_opt_get_string(ctx->opts, KRB5_BACKUP_KDC);
+ 
+     use_kdcinfo = dp_opt_get_bool(ctx->opts, KRB5_USE_KDCINFO);
++    sss_krb5_parse_lookahead(dp_opt_get_string(ctx->opts, KRB5_KDCINFO_LOOKAHEAD),
++                             &n_lookahead_primary, &n_lookahead_backup);
+ 
+     ret = krb5_service_init(ctx, be_ctx, SSS_KRB5KDC_FO_SRV,
+                             primary_servers, backup_servers, realm,
+-                            use_kdcinfo, &ctx->service);
++                            use_kdcinfo,
++                            n_lookahead_primary,
++                            n_lookahead_backup,
++                            &ctx->service);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_FATAL_FAILURE, "Failed to init KRB5 failover service!\n");
+         return ret;
+diff --git a/src/providers/krb5/krb5_opts.c b/src/providers/krb5/krb5_opts.c
+index 6bec52767..05395e0f4 100644
+--- a/src/providers/krb5/krb5_opts.c
++++ b/src/providers/krb5/krb5_opts.c
+@@ -42,6 +42,7 @@ struct dp_option default_krb5_opts[] = {
+     { "krb5_canonicalize", DP_OPT_BOOL, BOOL_FALSE, BOOL_FALSE },
+     { "krb5_use_enterprise_principal", DP_OPT_BOOL, BOOL_FALSE, BOOL_FALSE },
+     { "krb5_use_kdcinfo", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
++    { "krb5_kdcinfo_lookahead", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "krb5_map_user", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     DP_OPTION_TERMINATOR
+ };
+diff --git a/src/providers/ldap/ldap_common.c b/src/providers/ldap/ldap_common.c
+index 9cd8ec09c..4c49f08c5 100644
+--- a/src/providers/ldap/ldap_common.c
++++ b/src/providers/ldap/ldap_common.c
+@@ -335,6 +335,8 @@ int sdap_gssapi_init(TALLOC_CTX *mem_ctx,
+     const char *krb5_opt_realm;
+     struct krb5_service *service = NULL;
+     TALLOC_CTX *tmp_ctx;
++    size_t n_lookahead_primary;
++    size_t n_lookahead_backup;
+ 
+     tmp_ctx = talloc_new(NULL);
+     if (tmp_ctx == NULL) return ENOMEM;
+@@ -361,11 +363,18 @@ int sdap_gssapi_init(TALLOC_CTX *mem_ctx,
+         }
+     }
+ 
++    sss_krb5_parse_lookahead(
++        dp_opt_get_string(opts, SDAP_KRB5_KDCINFO_LOOKAHEAD),
++        &n_lookahead_primary,
++        &n_lookahead_backup);
++
+     ret = krb5_service_init(mem_ctx, bectx,
+                             SSS_KRB5KDC_FO_SRV, krb5_servers,
+                             krb5_backup_servers, krb5_realm,
+                             dp_opt_get_bool(opts,
+                                             SDAP_KRB5_USE_KDCINFO),
++                            n_lookahead_primary,
++                            n_lookahead_backup,
+                             &service);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_FATAL_FAILURE, "Failed to init KRB5 failover service!\n");
+diff --git a/src/providers/ldap/ldap_opts.c b/src/providers/ldap/ldap_opts.c
+index f7574fac2..613fe7463 100644
+--- a/src/providers/ldap/ldap_opts.c
++++ b/src/providers/ldap/ldap_opts.c
+@@ -82,6 +82,7 @@ struct dp_option default_basic_opts[] = {
+     { "krb5_realm", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "krb5_canonicalize", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
+     { "krb5_use_kdcinfo", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
++    { "krb5_kdcinfo_lookahead", DP_OPT_STRING, NULL_STRING, NULL_STRING },
+     { "ldap_pwd_policy", DP_OPT_STRING, { "none" }, NULL_STRING },
+     { "ldap_referrals", DP_OPT_BOOL, BOOL_TRUE, BOOL_TRUE },
+     { "account_cache_expiration", DP_OPT_NUMBER, { .number = 0 }, NULL_NUMBER },
+diff --git a/src/providers/ldap/sdap.h b/src/providers/ldap/sdap.h
+index 0f79ae9de..48061d389 100644
+--- a/src/providers/ldap/sdap.h
++++ b/src/providers/ldap/sdap.h
+@@ -199,6 +199,7 @@ enum sdap_basic_opt {
+     SDAP_KRB5_REALM,
+     SDAP_KRB5_CANONICALIZE,
+     SDAP_KRB5_USE_KDCINFO,
++    SDAP_KRB5_KDCINFO_LOOKAHEAD,
+     SDAP_PWD_POLICY,
+     SDAP_REFERRALS,
+     SDAP_ACCOUNT_CACHE_EXPIRATION,
+-- 
+2.19.1
+

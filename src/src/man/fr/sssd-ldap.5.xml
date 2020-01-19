@@ -194,6 +194,39 @@ correspondant aux valeurs  d'Active Directory 2008r2.
                 </varlistentry>
 
                 <varlistentry>
+                    <term>ldap_pwmodify_mode (string)</term>
+                    <listitem>
+                        <para>
+                            Specify the operation that is used to modify user password.
+                        </para>
+                        <para>
+                            Two modes are currently supported:
+                            <itemizedlist>
+                                <listitem>
+                                    <para>
+                                        exop - Password Modify Extended Operation (RFC 3062)
+                                    </para>
+                                </listitem>
+                                <listitem>
+                                    <para>
+                                        ldap_modify - Direct modification of userPassword (not recommended).
+                                    </para>
+                                </listitem>
+                            </itemizedlist>
+                        </para>
+                        <para>
+                            Note: First, a new connection is established to verify current password by
+binding as the user that requested password change. If successful, this
+connection is used to change the password therefore the user must have write
+access to userPassword attribute.
+                        </para>
+                        <para>
+                            Default: exop
+                        </para>
+                    </listitem>
+                </varlistentry>
+
+                <varlistentry>
                     <term>ldap_default_bind_dn (chaîne)</term>
                     <listitem>
                         <para>
@@ -962,26 +995,24 @@ restrict group nesting.
                     <term>ldap_groups_use_matching_rule_in_chain</term>
                     <listitem>
                         <para>
-                            Cette option indique à SSSD de tirer parti d'une fonctionnalité Active
-Directory spécifique qui peut accélérer les opérations de recherche de
-groupe sur les déploiements utilisant des groupes profondément imbriqués et
-complexes.
+                            This option tells SSSD to take advantage of an Active Directory-specific
+feature which may speed up group lookup operations on deployments with
+complex or deep nested groups.
                         </para>
                         <para>
-                            Dans la plupart des cas, il est préférable de laisser cette option
-désactivée. Elle ne fournit une augmentation des performances que sur les
-imbrications très complexes.
+                            In most common cases, it is best to leave this option disabled. It generally
+only provides a performance increase on very complex nestings.
                         </para>
                         <para>
-                            Si cette option est activée, SSSD l'utilisera s'il détecte que le serveur la
-prend en charge au cours de la connexion initiale. Ainsi, « true » signifie
-essentiellement « auto-detect ».
+                            If this option is enabled, SSSD will use it if it detects that the server
+supports it during initial connection. So "True" here essentially means
+"auto-detect".
                         </para>
                         <para>
-                            Remarque : Cette fonctionnalité fonctionne uniquement avec Active Directory
-2008 R1 et versions suivantes. Consulter <ulink
-url="http://msdn.microsoft.com/en-us/library/windows/desktop/aa746475%28v=vs.85%29.aspx">la
-documentation de MSDN(TM)</ulink> pour plus de détails.
+                            Note: This feature is currently known to work only with Active Directory
+2008 R1 and later. See <ulink
+url="http://msdn.microsoft.com/en-us/library/windows/desktop/aa746475%28v=vs.85%29.aspx">
+MSDN(TM) documentation</ulink> for more details.
                         </para>
                         <para>
                             Par défaut : False
@@ -993,21 +1024,20 @@ documentation de MSDN(TM)</ulink> pour plus de détails.
                     <term>ldap_initgroups_use_matching_rule_in_chain</term>
                     <listitem>
                         <para>
-                            Cette option indique à SSSD de tirer parti d'une fonctionnalité Active
-Directory spécifique qui peut accélérer les opérations initgroups (le plus
-souvent lors de l'utilisation de groupes profondément imbriqués ou
-complexes).
+                            This option tells SSSD to take advantage of an Active Directory-specific
+feature which might speed up initgroups operations (most notably when
+dealing with complex or deep nested groups).
                         </para>
                         <para>
-                            Si cette option est activée, SSSD l'utilisera s'il détecte que le serveur la
-prend en charge au cours de la connexion initiale. Ainsi, « true » signifie
-essentiellement « auto-detect ».
+                            If this option is enabled, SSSD will use it if it detects that the server
+supports it during initial connection. So "True" here essentially means
+"auto-detect".
                         </para>
                         <para>
-                            Remarque : Cette fonctionnalité fonctionne uniquement avec Active Directory
-2008 R1 et versions suivantes. Consulter <ulink
-url="http://msdn.microsoft.com/en-us/library/windows/desktop/aa746475%28v=vs.85%29.aspx">la
-documentation de MSDN(TM)</ulink> pour plus de détails.
+                            Note: This feature is currently known to work only with Active Directory
+2008 R1 and later. See <ulink
+url="http://msdn.microsoft.com/en-us/library/windows/desktop/aa746475%28v=vs.85%29.aspx">
+MSDN(TM) documentation</ulink> for more details.
                         </para>
                         <para>
                             Par défaut : False
@@ -1620,11 +1650,20 @@ pris en charge.
                     <term>ldap_sasl_authid (chaîne)</term>
                     <listitem>
                         <para>
-                            Définit l'identité à utiliser pour l'autorisation SASL. Lorsque GSSAPI est
-utilisé, c'est l'identifiant Kerberos principal utilisé pour s'authentifier
-à l'annuaire. Cette option peut soit contenir le principal complet (par
-exemple host/myhost@EXAMPLE.COM), soit juste le nom du principal (par
-exemple host/myhost).
+                            Specify the SASL authorization id to use.  When GSSAPI is used, this
+represents the Kerberos principal used for authentication to the directory.
+This option can either contain the full principal (for example
+host/myhost@EXAMPLE.COM) or just the principal name (for example
+host/myhost). By default, the value is not set and the following principals
+are used: <programlisting>
+hostname@REALM
+netbiosname$@REALM
+host/hostname@REALM
+*$@REALM
+host/*@REALM
+host/*
+                            </programlisting> If none of them are
+found, the first principal in keytab is returned.
                         </para>
                         <para>
                             Par défaut : host/hostname@REALM

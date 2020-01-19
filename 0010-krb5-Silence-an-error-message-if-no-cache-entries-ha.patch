@@ -1,0 +1,33 @@
+From 23fb7ea2f98c08a7df21b68bf96ddfe982fa284e Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Mon, 25 Mar 2019 10:17:39 +0100
+Subject: [PATCH] krb5: Silence an error message if no cache entries have
+ ccache stored but renewal is enabled
+
+If no user entries had the ccacheFile attribute, the code would treat
+ENOENT as an error and print a CRIT-level debug message.
+
+Reviewed-by: Alexey Tikhonov <atikhono@redhat.com>
+(cherry picked from commit 22fc051df8bd1a9ec9e22aac85659d1da3bdbaec)
+---
+ src/providers/krb5/krb5_renew_tgt.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/providers/krb5/krb5_renew_tgt.c b/src/providers/krb5/krb5_renew_tgt.c
+index c7e2bd91f..8b2159e92 100644
+--- a/src/providers/krb5/krb5_renew_tgt.c
++++ b/src/providers/krb5/krb5_renew_tgt.c
+@@ -413,7 +413,9 @@ static errno_t check_ccache_files(struct renew_tgt_ctx *renew_tgt_ctx)
+     ret = sysdb_search_entry(tmp_ctx, renew_tgt_ctx->be_ctx->domain->sysdb, base_dn,
+                              LDB_SCOPE_SUBTREE, ccache_filter, ccache_attrs,
+                              &msgs_count, &msgs);
+-    if (ret != EOK) {
++    if (ret == ENOENT) {
++        msgs_count = 0; /* Fall through */
++    } else if (ret != EOK) {
+         DEBUG(SSSDBG_CRIT_FAILURE, "sysdb_search_entry failed.\n");
+         goto done;
+     }
+-- 
+2.19.1
+

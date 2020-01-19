@@ -49,10 +49,10 @@ or a template. In the template, the following sequences are substituted:
         </variablelist>
     </para>
     <para>
-        This option can also be set per-domain.
+        Detta alternativ kan även sättas per domän.
     </para>
     <para>
-        example: <programlisting>
+        exempel: <programlisting>
 override_homedir = /home/%u
         </programlisting>
     </para>

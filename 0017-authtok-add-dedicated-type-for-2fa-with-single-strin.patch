@@ -1,0 +1,324 @@
+From fc57f57b805a5b91348a8355e74ceb4444881729 Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Wed, 27 Mar 2019 09:04:53 +0100
+Subject: [PATCH 17/21] authtok: add dedicated type for 2fa with single string
+
+Currently the password type is used to send two-factor authentication
+credentials entered in a single string to the backend, This is
+unreliable and only works properly if password authentication is not
+available for the user as well.
+
+To support 2FA credentials in a single string better a new authtok type
+is added.
+
+Related to https://pagure.io/SSSD/sssd/issue/3264
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit ac4b33f765ac322949ac7c2f24985d3b9c178168)
+---
+ src/providers/krb5/krb5_auth.c          |  1 +
+ src/providers/krb5/krb5_child.c         | 13 +++++++
+ src/providers/krb5/krb5_child_handler.c |  4 +++
+ src/responder/pam/pamsrv_cmd.c          |  1 +
+ src/sss_client/sss_cli.h                |  3 ++
+ src/tests/cmocka/test_authtok.c         | 45 +++++++++++++++++++++++++
+ src/util/authtok.c                      | 42 +++++++++++++++++++++++
+ src/util/authtok.h                      | 35 +++++++++++++++++++
+ 8 files changed, 144 insertions(+)
+
+diff --git a/src/providers/krb5/krb5_auth.c b/src/providers/krb5/krb5_auth.c
+index d40d2afed..9a9250434 100644
+--- a/src/providers/krb5/krb5_auth.c
++++ b/src/providers/krb5/krb5_auth.c
+@@ -495,6 +495,7 @@ struct tevent_req *krb5_auth_send(TALLOC_CTX *mem_ctx,
+         case SSS_PAM_CHAUTHTOK:
+             if (authtok_type != SSS_AUTHTOK_TYPE_PASSWORD
+                     && authtok_type != SSS_AUTHTOK_TYPE_2FA
++                    && authtok_type != SSS_AUTHTOK_TYPE_2FA_SINGLE
+                     && authtok_type != SSS_AUTHTOK_TYPE_SC_PIN
+                     && authtok_type != SSS_AUTHTOK_TYPE_SC_KEYPAD) {
+                 /* handle empty password gracefully */
+diff --git a/src/providers/krb5/krb5_child.c b/src/providers/krb5/krb5_child.c
+index a578930a9..a86d9a7ae 100644
+--- a/src/providers/krb5/krb5_child.c
++++ b/src/providers/krb5/krb5_child.c
+@@ -503,6 +503,15 @@ static krb5_error_code tokeninfo_matches(TALLOC_CTX *mem_ctx,
+             return ret;
+         }
+ 
++        return tokeninfo_matches_pwd(mem_ctx, ti, pwd, len, out_token, out_pin);
++        break;
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
++        ret = sss_authtok_get_2fa_single(auth_tok, &pwd, &len);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE, "sss_authtok_get_password failed.\n");
++            return ret;
++        }
++
+         return tokeninfo_matches_pwd(mem_ctx, ti, pwd, len, out_token, out_pin);
+         break;
+     case SSS_AUTHTOK_TYPE_2FA:
+@@ -2091,6 +2100,7 @@ static errno_t tgt_req_child(struct krb5_req *kr)
+     /* No password is needed for pre-auth or if we have 2FA or SC */
+     if (kr->pd->cmd != SSS_PAM_PREAUTH
+             && sss_authtok_get_type(kr->pd->authtok) != SSS_AUTHTOK_TYPE_2FA
++            && sss_authtok_get_type(kr->pd->authtok) != SSS_AUTHTOK_TYPE_2FA_SINGLE
+             && sss_authtok_get_type(kr->pd->authtok) != SSS_AUTHTOK_TYPE_SC_PIN
+             && sss_authtok_get_type(kr->pd->authtok)
+                                                 != SSS_AUTHTOK_TYPE_SC_KEYPAD) {
+@@ -2349,6 +2359,9 @@ static errno_t unpack_authtok(struct sss_auth_token *tok,
+     case SSS_AUTHTOK_TYPE_CCFILE:
+         ret = sss_authtok_set_ccfile(tok, (char *)(buf + *p), 0);
+         break;
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
++        ret = sss_authtok_set_2fa_single(tok, (char *)(buf + *p), 0);
++        break;
+     case SSS_AUTHTOK_TYPE_2FA:
+     case SSS_AUTHTOK_TYPE_SC_PIN:
+     case SSS_AUTHTOK_TYPE_SC_KEYPAD:
+diff --git a/src/providers/krb5/krb5_child_handler.c b/src/providers/krb5/krb5_child_handler.c
+index 352ff980d..b7fb54499 100644
+--- a/src/providers/krb5/krb5_child_handler.c
++++ b/src/providers/krb5/krb5_child_handler.c
+@@ -79,6 +79,10 @@ static errno_t pack_authtok(struct io_buffer *buf, size_t *rp,
+         ret = sss_authtok_get_ccfile(tok, &data, &len);
+         auth_token_length = len + 1;
+         break;
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
++        ret = sss_authtok_get_2fa_single(tok, &data, &len);
++        auth_token_length = len + 1;
++        break;
+     case SSS_AUTHTOK_TYPE_2FA:
+     case SSS_AUTHTOK_TYPE_SC_PIN:
+     case SSS_AUTHTOK_TYPE_SC_KEYPAD:
+diff --git a/src/responder/pam/pamsrv_cmd.c b/src/responder/pam/pamsrv_cmd.c
+index 94867a0fe..6f3a7e56b 100644
+--- a/src/responder/pam/pamsrv_cmd.c
++++ b/src/responder/pam/pamsrv_cmd.c
+@@ -160,6 +160,7 @@ static int extract_authtok_v2(struct sss_auth_token *tok,
+         }
+         break;
+     case SSS_AUTHTOK_TYPE_2FA:
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
+     case SSS_AUTHTOK_TYPE_SC_PIN:
+     case SSS_AUTHTOK_TYPE_SC_KEYPAD:
+         ret = sss_authtok_set(tok, auth_token_type,
+diff --git a/src/sss_client/sss_cli.h b/src/sss_client/sss_cli.h
+index 7e748c281..23ef21608 100644
+--- a/src/sss_client/sss_cli.h
++++ b/src/sss_client/sss_cli.h
+@@ -340,6 +340,9 @@ enum sss_authtok_type {
+                                           * Smart Card authentication is used
+                                           * and that the PIN will be entered
+                                           * at the card reader. */
++    SSS_AUTHTOK_TYPE_2FA_SINGLE = 0x0006, /**< Authentication token has two
++                                           * factors in a single string, it may
++                                           * or may no contain a trailing \\0 */
+ };
+ 
+ /**
+diff --git a/src/tests/cmocka/test_authtok.c b/src/tests/cmocka/test_authtok.c
+index 9422f96bc..84e209783 100644
+--- a/src/tests/cmocka/test_authtok.c
++++ b/src/tests/cmocka/test_authtok.c
+@@ -652,6 +652,49 @@ void test_sss_authtok_sc_pin(void **state)
+     assert_int_equal(ret, EFAULT);
+ }
+ 
++/* Test when type has value SSS_AUTHTOK_TYPE_2FA_SINGLE */
++static void test_sss_authtok_2fa_single(void **state)
++{
++    size_t len;
++    errno_t ret;
++    char *data;
++    size_t ret_len;
++    const char *pwd;
++    struct test_state *ts;
++    enum sss_authtok_type type;
++
++    ts = talloc_get_type_abort(*state, struct test_state);
++    data = talloc_strdup(ts, "1stfacto2ndfactor");
++    assert_non_null(data);
++
++    len = strlen(data) + 1;
++    type = SSS_AUTHTOK_TYPE_2FA_SINGLE;
++    ret = sss_authtok_set(ts->authtoken, type, (const uint8_t *)data, len);
++
++    assert_int_equal(ret, EOK);
++    assert_int_equal(type, sss_authtok_get_type(ts->authtoken));
++    assert_int_equal(len, sss_authtok_get_size(ts->authtoken));
++    assert_string_equal(data, sss_authtok_get_data(ts->authtoken));
++
++    ret = sss_authtok_get_2fa_single(ts->authtoken, &pwd, &ret_len);
++
++    assert_int_equal(ret, EOK);
++    assert_string_equal(data, pwd);
++    assert_int_equal(len - 1, ret_len);
++
++    ret = sss_authtok_set_2fa_single(ts->authtoken, data, len);
++    assert_int_equal(ret, EOK);
++
++    ret = sss_authtok_get_2fa_single(ts->authtoken, &pwd, &ret_len);
++    assert_int_equal(ret, EOK);
++    assert_string_equal(data, pwd);
++    assert_int_equal(len - 1, ret_len);
++
++    talloc_free(data);
++    sss_authtok_set_empty(ts->authtoken);
++}
++
++
+ int main(int argc, const char *argv[])
+ {
+     poptContext pc;
+@@ -687,6 +730,8 @@ int main(int argc, const char *argv[])
+                                         setup, teardown),
+         cmocka_unit_test_setup_teardown(test_sss_authtok_sc_blobs,
+                                         setup, teardown),
++        cmocka_unit_test_setup_teardown(test_sss_authtok_2fa_single,
++                                        setup, teardown),
+     };
+ 
+     /* Set debug level to invalid value so we can decide if -d 0 was used. */
+diff --git a/src/util/authtok.c b/src/util/authtok.c
+index c2f78be32..0cac24598 100644
+--- a/src/util/authtok.c
++++ b/src/util/authtok.c
+@@ -41,6 +41,7 @@ size_t sss_authtok_get_size(struct sss_auth_token *tok)
+     case SSS_AUTHTOK_TYPE_2FA:
+     case SSS_AUTHTOK_TYPE_SC_PIN:
+     case SSS_AUTHTOK_TYPE_SC_KEYPAD:
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
+         return tok->length;
+     case SSS_AUTHTOK_TYPE_EMPTY:
+         return 0;
+@@ -76,6 +77,7 @@ errno_t sss_authtok_get_password(struct sss_auth_token *tok,
+     case SSS_AUTHTOK_TYPE_2FA:
+     case SSS_AUTHTOK_TYPE_SC_PIN:
+     case SSS_AUTHTOK_TYPE_SC_KEYPAD:
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
+         return EACCES;
+     }
+ 
+@@ -101,6 +103,33 @@ errno_t sss_authtok_get_ccfile(struct sss_auth_token *tok,
+     case SSS_AUTHTOK_TYPE_2FA:
+     case SSS_AUTHTOK_TYPE_SC_PIN:
+     case SSS_AUTHTOK_TYPE_SC_KEYPAD:
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
++        return EACCES;
++    }
++
++    return EINVAL;
++}
++
++errno_t sss_authtok_get_2fa_single(struct sss_auth_token *tok,
++                                   const char **str, size_t *len)
++{
++    if (!tok) {
++        return EINVAL;
++    }
++    switch (tok->type) {
++    case SSS_AUTHTOK_TYPE_EMPTY:
++        return ENOENT;
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
++        *str = (const char *)tok->data;
++        if (len) {
++            *len = tok->length - 1;
++        }
++        return EOK;
++    case SSS_AUTHTOK_TYPE_PASSWORD:
++    case SSS_AUTHTOK_TYPE_2FA:
++    case SSS_AUTHTOK_TYPE_SC_PIN:
++    case SSS_AUTHTOK_TYPE_SC_KEYPAD:
++    case SSS_AUTHTOK_TYPE_CCFILE:
+         return EACCES;
+     }
+ 
+@@ -151,6 +180,7 @@ void sss_authtok_set_empty(struct sss_auth_token *tok)
+     case SSS_AUTHTOK_TYPE_PASSWORD:
+     case SSS_AUTHTOK_TYPE_2FA:
+     case SSS_AUTHTOK_TYPE_SC_PIN:
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
+         safezero(tok->data, tok->length);
+         break;
+     case SSS_AUTHTOK_TYPE_CCFILE:
+@@ -181,6 +211,15 @@ errno_t sss_authtok_set_ccfile(struct sss_auth_token *tok,
+                                   "ccfile", ccfile, len);
+ }
+ 
++errno_t sss_authtok_set_2fa_single(struct sss_auth_token *tok,
++                                   const char *str, size_t len)
++{
++    sss_authtok_set_empty(tok);
++
++    return sss_authtok_set_string(tok, SSS_AUTHTOK_TYPE_2FA_SINGLE,
++                                  "2fa_single", str, len);
++}
++
+ static errno_t sss_authtok_set_2fa_from_blob(struct sss_auth_token *tok,
+                                              const uint8_t *data, size_t len);
+ 
+@@ -199,6 +238,8 @@ errno_t sss_authtok_set(struct sss_auth_token *tok,
+         return sss_authtok_set_sc_from_blob(tok, data, len);
+     case SSS_AUTHTOK_TYPE_SC_KEYPAD:
+         return sss_authtok_set_sc_from_blob(tok, data, len);
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
++        return sss_authtok_set_2fa_single(tok, (const char *) data, len);
+     case SSS_AUTHTOK_TYPE_EMPTY:
+         sss_authtok_set_empty(tok);
+         return EOK;
+@@ -566,6 +607,7 @@ errno_t sss_authtok_get_sc_pin(struct sss_auth_token *tok, const char **_pin,
+     case SSS_AUTHTOK_TYPE_CCFILE:
+     case SSS_AUTHTOK_TYPE_2FA:
+     case SSS_AUTHTOK_TYPE_SC_KEYPAD:
++    case SSS_AUTHTOK_TYPE_2FA_SINGLE:
+         return EACCES;
+     }
+ 
+diff --git a/src/util/authtok.h b/src/util/authtok.h
+index a55e89fd2..dae3ff6b1 100644
+--- a/src/util/authtok.h
++++ b/src/util/authtok.h
+@@ -348,4 +348,39 @@ errno_t sss_authtok_get_sc(struct sss_auth_token *tok,
+                            const char **_token_name, size_t *_token_name_len,
+                            const char **_module_name, size_t *_module_name_len,
+                            const char **_key_id, size_t *_key_id_len);
++
++
++/**
++ * @brief Returns a const string if the auth token is of type
++          SSS_AUTHTOK_TYPE_2FA_SINGLE, otherwise it returns an error
++ *
++ * @param tok    A pointer to an sss_auth_token
++ * @param pwd    A pointer to a const char *, that will point to a null
++ *               terminated string
++ * @param len    The length of the credential string
++ *
++ * @return       EOK on success
++ *               ENOENT if the token is empty
++ *               EACCESS if the token is not a password token
++ */
++errno_t sss_authtok_get_2fa_single(struct sss_auth_token *tok,
++                                   const char **str, size_t *len);
++
++/**
++ * @brief Set a 2FA credentials in a single strings  into an auth token,
++ *        replacing any previous data
++ *
++ * @param tok        A pointer to an sss_auth_token structure to change, also
++ *                   used as a memory context to allocate the internal data.
++ * @param password   A string where the two authentication factors are
++ *                   concatenated together
++ * @param len        The length of the string or, if 0 is passed,
++ *                   then strlen(password) will be used internally.
++ *
++ * @return       EOK on success
++ *               ENOMEM on error
++ */
++errno_t sss_authtok_set_2fa_single(struct sss_auth_token *tok,
++                                   const char *str, size_t len);
++
+ #endif /*  __AUTHTOK_H__ */
+-- 
+2.19.1
+
