@@ -1,0 +1,82 @@
+From 7b8ed13c2bac164fdc49227d1b51364bdf907a98 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Tue, 19 Jun 2018 16:09:30 +0200
+Subject: [PATCH] AD/LDAP: Do not misuse the ignore_mark_offline to check if a
+ connection needs to be checked for POSIX attribute presence
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The logic behind deciding whether to check if a server contains any
+POSIX attributes used the ignore_mark_offline flag. This was OK for some
+time, because this flag was only set for to true for Global Catalog
+connections, which are those that we need to check.
+
+However, in recent releases, the flag was also set for any connection
+towards a trusted domain. This had the unintended effect that any
+lookup, LDAP or GC against a trusted domain ran the wide POSIX presence
+check.
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3754
+
+Reviewed-by: Fabiano Fidêncio <fidencio@redhat.com>
+(cherry picked from commit 5e1641b104f159f9fa47c3008d84119dfd5ab226)
+
+DOWNSTREAM:
+Resolves: rhbz#1583725 - SSSD AD uses LDAP filter to detect POSIX attributes stored in AD GC also for regular AD DC queries
+---
+ src/providers/ad/ad_common.c     | 2 ++
+ src/providers/ldap/ldap_common.c | 2 +-
+ src/providers/ldap/ldap_common.h | 2 ++
+ 3 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/providers/ad/ad_common.c b/src/providers/ad/ad_common.c
+index 8caaba6c0d06cfe83d9741536192d662fc936273..feeb5d09643a02b99be1a387b41842a034a323b8 100644
+--- a/src/providers/ad/ad_common.c
++++ b/src/providers/ad/ad_common.c
+@@ -1408,6 +1408,7 @@ ad_gc_conn_list(TALLOC_CTX *mem_ctx, struct ad_id_ctx *ad_ctx,
+         clist[cindex] = ad_ctx->gc_ctx;
+         clist[cindex]->ignore_mark_offline = true;
+         clist[cindex]->no_mpg_user_fallback = true;
++        clist[cindex]->check_posix_attrs = true;
+         cindex++;
+     }
+ 
+@@ -1454,6 +1455,7 @@ ad_user_conn_list(TALLOC_CTX *mem_ctx,
+             && IS_SUBDOMAIN(dom)) {
+         clist[cindex] = ad_ctx->gc_ctx;
+         clist[cindex]->ignore_mark_offline = true;
++        clist[cindex]->check_posix_attrs = true;
+         cindex++;
+     }
+ 
+diff --git a/src/providers/ldap/ldap_common.c b/src/providers/ldap/ldap_common.c
+index 15377ee1f062c0167aabee30ef0757ebe7271682..a0a9b8523310b2551ee992f8d0c2e369dafaa56d 100644
+--- a/src/providers/ldap/ldap_common.c
++++ b/src/providers/ldap/ldap_common.c
+@@ -893,7 +893,7 @@ bool should_run_posix_check(struct sdap_id_ctx *ctx,
+     if (use_id_mapping == false &&
+             posix_request == true &&
+             ctx->opts->schema_type == SDAP_SCHEMA_AD &&
+-            conn->ignore_mark_offline == true &&
++            conn->check_posix_attrs == true &&
+             ctx->srv_opts &&
+             ctx->srv_opts->posix_checked == false) {
+         return true;
+diff --git a/src/providers/ldap/ldap_common.h b/src/providers/ldap/ldap_common.h
+index 3cefdd0bfb0e96b5a7f904fe753dfc457b2a45c2..3de3568cb28c258c00f9b522c0b9120adca81d81 100644
+--- a/src/providers/ldap/ldap_common.h
++++ b/src/providers/ldap/ldap_common.h
+@@ -59,6 +59,8 @@ struct sdap_id_conn_ctx {
+     bool ignore_mark_offline;
+     /* do not fall back to user lookups for mpg domains on this connection */
+     bool no_mpg_user_fallback;
++    /* check if this connection contains POSIX attributes */
++    bool check_posix_attrs;
+ };
+ 
+ struct sdap_id_ctx {
+-- 
+2.17.1
+

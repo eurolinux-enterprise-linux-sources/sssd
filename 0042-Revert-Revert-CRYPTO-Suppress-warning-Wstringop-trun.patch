@@ -1,0 +1,52 @@
+From 503172f46360b33170063b3bf75047990c644ed5 Mon Sep 17 00:00:00 2001
+From: Lukas Slebodnik <lslebodn@redhat.com>
+Date: Tue, 31 Jul 2018 20:43:37 +0000
+Subject: [PATCH] Revert "Revert "CRYPTO: Suppress warning
+ Wstringop-truncation""
+
+This reverts commit bb20d5160faed5e0076887ac4a83e550be15a8b2.
+
+The patch introduced compile time warning
+src/util/crypto/libcrypto/crypto_sha512crypt.c:280:10: error: 'stpncpy'
+    output truncated before terminating nul copying 3 bytes from a string
+    of the same length [-Werror=stringop-truncation]
+     cp = stpncpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
+          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Merges: https://pagure.io/SSSD/sssd/pull-request/3792
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+---
+ src/util/crypto/libcrypto/crypto_sha512crypt.c | 2 +-
+ src/util/crypto/nss/nss_sha512crypt.c          | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/util/crypto/libcrypto/crypto_sha512crypt.c b/src/util/crypto/libcrypto/crypto_sha512crypt.c
+index b074eee555fafac6e486bfdf9efb9ddf4964a990..5861f34b9325f7552491a07e8b85fe35ca5ae607 100644
+--- a/src/util/crypto/libcrypto/crypto_sha512crypt.c
++++ b/src/util/crypto/libcrypto/crypto_sha512crypt.c
+@@ -277,7 +277,7 @@ static int sha512_crypt_r(const char *key,
+         goto done;
+     }
+ 
+-    cp = stpncpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
++    cp = memcpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
+     buflen -= SALT_PREF_SIZE;
+ 
+     if (rounds_custom) {
+diff --git a/src/util/crypto/nss/nss_sha512crypt.c b/src/util/crypto/nss/nss_sha512crypt.c
+index 2f1624e6396c40f539a4e2034ab545cad8f05434..709cf51961bb7069ddebf3d636aa29b020756f0a 100644
+--- a/src/util/crypto/nss/nss_sha512crypt.c
++++ b/src/util/crypto/nss/nss_sha512crypt.c
+@@ -267,7 +267,7 @@ static int sha512_crypt_r(const char *key,
+         goto done;
+     }
+ 
+-    cp = stpncpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
++    cp = memcpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
+     buflen -= SALT_PREF_SIZE;
+ 
+     if (rounds_custom) {
+-- 
+2.14.4
+

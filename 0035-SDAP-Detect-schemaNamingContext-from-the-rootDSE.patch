@@ -1,0 +1,92 @@
+From bf4580b2f893cfb29d804a9fe6bb2d6247bb5cf2 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Sun, 8 Jul 2018 22:17:41 +0200
+Subject: [PATCH] SDAP: Detect schemaNamingContext from the rootDSE
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Whether an attribute is replicated to the Global Catalog or not can be
+detected by checking the value of the isMemberOfPartialAttributeSet
+attribute:
+https://docs.microsoft.com/en-us/windows/desktop/ADSchema/a-ismemberofpartialattributeset
+
+This attribute is present in all objects with the objectClass
+attributeSchema in AD:
+https://docs.microsoft.com/en-us/windows/desktop/AD/characteristics-of-attributes
+
+And finally, the attributeSchema objects in AD are present in a schema
+naming context. The schema naming context is replicated to all DCs in the
+forest even though their own naming context might be different:
+https://docs.microsoft.com/en-us/windows/desktop/ad/naming-contexts-and-partitions
+
+Where the schema naming context is located is given by the
+schemaNamingContext attribute of the rootDSE.
+
+This patch is trivial on its own and just reads schemaNamingContext from
+the rootDSE and stores it in the sdap_options structure for later use.
+
+Related:
+https://pagure.io/SSSD/sssd/issue/3755
+
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit c8d1c1b734a1763b3e1233f060cc5c8d6db078e9)
+---
+ src/providers/ldap/sdap.c | 10 ++++++++++
+ src/providers/ldap/sdap.h |  3 +++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/src/providers/ldap/sdap.c b/src/providers/ldap/sdap.c
+index 0241a99e49e94345753399d5d62639c99b95ee77..5c9d0a45dfb96e8901467aa6a3391b8df84f6d42 100644
+--- a/src/providers/ldap/sdap.c
++++ b/src/providers/ldap/sdap.c
+@@ -1284,6 +1284,7 @@ int sdap_get_server_opts_from_rootdse(TALLOC_CTX *memctx,
+     const char *last_usn_name;
+     const char *last_usn_value;
+     const char *entry_usn_name;
++    const char *schema_nc = NULL;
+     char *endptr = NULL;
+     int ret;
+     int i;
+@@ -1400,6 +1401,15 @@ int sdap_get_server_opts_from_rootdse(TALLOC_CTX *memctx,
+                    "(%s). Continuing without AD performance enhancements\n",
+                    strerror(ret));
+         }
++
++        ret = sysdb_attrs_get_string(rootdse,
++                                     SDAP_ROOTDSE_ATTR_AD_SCHEMA_NC,
++                                     &schema_nc);
++        if (ret == EOK) {
++            DEBUG(SSSDBG_CONF_SETTINGS,
++                  "Will look for schema at [%s]\n", schema_nc);
++            opts->schema_basedn = talloc_strdup(opts, schema_nc);
++        }
+     }
+ 
+     if (!last_usn_name) {
+diff --git a/src/providers/ldap/sdap.h b/src/providers/ldap/sdap.h
+index 0790544818633e26ee5a8fbdca556b8230b1df3f..31c25c32f059b4290a7511600cee638ee7a269e8 100644
+--- a/src/providers/ldap/sdap.h
++++ b/src/providers/ldap/sdap.h
+@@ -130,6 +130,7 @@ struct sdap_ppolicy_data {
+ #define SDAP_ROOTDSE_ATTR_NAMING_CONTEXTS "namingContexts"
+ #define SDAP_ROOTDSE_ATTR_DEFAULT_NAMING_CONTEXT "defaultNamingContext"
+ #define SDAP_ROOTDSE_ATTR_AD_VERSION "domainControllerFunctionality"
++#define SDAP_ROOTDSE_ATTR_AD_SCHEMA_NC "schemaNamingContext"
+ 
+ #define SDAP_IPA_USN "entryUSN"
+ #define SDAP_IPA_LAST_USN "lastUSN"
+@@ -496,8 +497,10 @@ struct sdap_options {
+     /* The search bases for the domain or its subdomain */
+     struct sdap_domain *sdom;
+ 
++    /* The options below are normally only used with AD */
+     bool support_matching_rule;
+     enum dc_functional_level dc_functional_level;
++    const char *schema_basedn;
+ 
+     /* Certificate mapping support */
+     struct sdap_certmap_ctx *sdap_certmap_ctx;
+-- 
+2.17.1
+

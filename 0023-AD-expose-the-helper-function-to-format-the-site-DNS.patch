@@ -1,0 +1,91 @@
+From 09fd8246f25dbfb80db638a0dd8f2fe4c1fba957 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Mon, 25 Jun 2018 13:03:38 +0200
+Subject: [PATCH] AD: expose the helper function to format the site DNS query
+
+This function will be used later in the patchset. Instead of exposing
+the format constant, expose the function that builds the DNS query for
+site discovery.
+
+Related:
+https://pagure.io/SSSD/sssd/issue/3291
+
+Reviewed-by: Sumit Bose <sbose@redhat.com>
+(cherry picked from commit 29bbc8e017f2d9b98667890a9b7056128a93e572)
+
+DOWNSTREAM:
+Resolves: rhbz#1416528 - sssd in cross realm trust configuration should be able to use AD KDCs from a client site defined in sssd.conf or a snippet
+---
+ src/providers/ad/ad_srv.c | 21 +++++++++++++++------
+ src/providers/ad/ad_srv.h |  4 ++++
+ 2 files changed, 19 insertions(+), 6 deletions(-)
+
+diff --git a/src/providers/ad/ad_srv.c b/src/providers/ad/ad_srv.c
+index 4fa1668605e131b2e31802b1401f49fc6e00a23b..5fd25f60e8bf38c3952823601593515b6c703284 100644
+--- a/src/providers/ad/ad_srv.c
++++ b/src/providers/ad/ad_srv.c
+@@ -38,6 +38,13 @@
+ 
+ #define AD_SITE_DOMAIN_FMT "%s._sites.%s"
+ 
++char *ad_site_dns_discovery_domain(TALLOC_CTX *mem_ctx,
++                                   const char *site,
++                                   const char *domain)
++{
++    return talloc_asprintf(mem_ctx, AD_SITE_DOMAIN_FMT, site, domain);
++}
++
+ static errno_t ad_sort_servers_by_dns(TALLOC_CTX *mem_ctx,
+                                       const char *domain,
+                                       struct fo_server_info **_srv,
+@@ -154,8 +161,8 @@ static struct tevent_req *ad_get_dc_servers_send(TALLOC_CTX *mem_ctx,
+         DEBUG(SSSDBG_TRACE_FUNC, "Looking up domain controllers in domain "
+               "%s and site %s\n", discovery_domain, site);
+ 
+-        domains[0] = talloc_asprintf(state, AD_SITE_DOMAIN_FMT,
+-                                     site, discovery_domain);
++        domains[0] = ad_site_dns_discovery_domain(domains,
++                                                  site, discovery_domain);
+         if (domains[0] == NULL) {
+             ret = ENOMEM;
+             goto immediately;
+@@ -775,9 +782,10 @@ static void ad_srv_plugin_site_done(struct tevent_req *subreq)
+         if (strcmp(state->service, "gc") == 0) {
+             if (state->forest != NULL) {
+                 if (state->site != NULL) {
+-                    primary_domain = talloc_asprintf(state, AD_SITE_DOMAIN_FMT,
+-                                                     state->site,
+-                                                     state->forest);
++                    primary_domain = ad_site_dns_discovery_domain(
++                                                            state,
++                                                            state->site,
++                                                            state->forest);
+                     if (primary_domain == NULL) {
+                         ret = ENOMEM;
+                         goto done;
+@@ -791,7 +799,8 @@ static void ad_srv_plugin_site_done(struct tevent_req *subreq)
+             }
+         } else {
+             if (state->site != NULL) {
+-                primary_domain = talloc_asprintf(state, AD_SITE_DOMAIN_FMT,
++                primary_domain = ad_site_dns_discovery_domain(
++                                                 state,
+                                                  state->site,
+                                                  state->discovery_domain);
+                 if (primary_domain == NULL) {
+diff --git a/src/providers/ad/ad_srv.h b/src/providers/ad/ad_srv.h
+index fddef686762e57bb95d648247131d39a797aa516..e553d594d77ad99f806af9634c2817754a80d4f5 100644
+--- a/src/providers/ad/ad_srv.h
++++ b/src/providers/ad/ad_srv.h
+@@ -49,4 +49,8 @@ errno_t ad_srv_plugin_recv(TALLOC_CTX *mem_ctx,
+                             struct fo_server_info **_backup_servers,
+                             size_t *_num_backup_servers);
+ 
++char *ad_site_dns_discovery_domain(TALLOC_CTX *mem_ctx,
++                                   const char *site,
++                                   const char *domain);
++
+ #endif /* __AD_SRV_H__ */
+-- 
+2.17.1
+

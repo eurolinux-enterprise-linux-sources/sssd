@@ -1,0 +1,54 @@
+From 61227cf82d01ee42300ad7054bfd683536e15acb Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Michal=20=C5=BDidek?= <mzidek@redhat.com>
+Date: Fri, 27 Jul 2018 11:37:20 +0200
+Subject: [PATCH] Revert "CRYPTO: Suppress warning Wstringop-truncation"
+
+This reverts commit 2951a9a84bd85f384213a3e071ffc167907df2d7.
+
+The original use stpncpy was correct. Changing it to memcpy
+changed the resulting hash. This resulted in users from
+local domain to not be able to authenticate (offline
+authentication was also probably broken) if their hash was
+created before this change.
+
+https://pagure.io/SSSD/sssd/issue/3791
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+
+DOWNSTREAM:
+Resolves: rhbz#1602781 - Local users failed to login with same password
+after upgrading to RHEL7.6
+---
+ src/util/crypto/libcrypto/crypto_sha512crypt.c | 2 +-
+ src/util/crypto/nss/nss_sha512crypt.c          | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/util/crypto/libcrypto/crypto_sha512crypt.c b/src/util/crypto/libcrypto/crypto_sha512crypt.c
+index 5861f34b9325f7552491a07e8b85fe35ca5ae607..b074eee555fafac6e486bfdf9efb9ddf4964a990 100644
+--- a/src/util/crypto/libcrypto/crypto_sha512crypt.c
++++ b/src/util/crypto/libcrypto/crypto_sha512crypt.c
+@@ -277,7 +277,7 @@ static int sha512_crypt_r(const char *key,
+         goto done;
+     }
+ 
+-    cp = memcpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
++    cp = stpncpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
+     buflen -= SALT_PREF_SIZE;
+ 
+     if (rounds_custom) {
+diff --git a/src/util/crypto/nss/nss_sha512crypt.c b/src/util/crypto/nss/nss_sha512crypt.c
+index 709cf51961bb7069ddebf3d636aa29b020756f0a..2f1624e6396c40f539a4e2034ab545cad8f05434 100644
+--- a/src/util/crypto/nss/nss_sha512crypt.c
++++ b/src/util/crypto/nss/nss_sha512crypt.c
+@@ -267,7 +267,7 @@ static int sha512_crypt_r(const char *key,
+         goto done;
+     }
+ 
+-    cp = memcpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
++    cp = stpncpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
+     buflen -= SALT_PREF_SIZE;
+ 
+     if (rounds_custom) {
+-- 
+2.14.4
+

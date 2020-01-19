@@ -1,0 +1,49 @@
+From 7689f3c8b4661c16a019c4410b1557f6ae4229aa Mon Sep 17 00:00:00 2001
+From: amitkumar50 <amitkuma@redhat.com>
+Date: Fri, 15 Jun 2018 10:45:38 +0530
+Subject: [PATCH] MAN: Give information regarding priority of ldap lookup
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This PR provides information about priority of lookup
+similar to as provided by function select_principal_from_keytab().
+
+Resolves: https://pagure.io/SSSD/sssd/issue/3475
+
+Reviewed-by: Pavel Březina <pbrezina@redhat.com>
+(cherry picked from commit c5ef56b4f9ffb361742edae36b261a4ffd0e75ae)
+
+DOWNSTREAM:
+Resolves: rhbz#1450778 - Full information regarding priority of lookup of principal in keytab not in man page
+---
+ src/man/sssd-ldap.5.xml | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/src/man/sssd-ldap.5.xml b/src/man/sssd-ldap.5.xml
+index f7617670c8b0fe1a5922c1a811b94e25bacecbfe..3145f0730341bf40159277ef2ae23be601154a89 100644
+--- a/src/man/sssd-ldap.5.xml
++++ b/src/man/sssd-ldap.5.xml
+@@ -1778,7 +1778,18 @@
+                             principal used for authentication to the directory.
+                             This option can either contain the full principal (for
+                             example host/myhost@EXAMPLE.COM) or just the principal name
+-                            (for example host/myhost).
++                            (for example host/myhost). By default, the value is not set
++                            and the following principals are used:
++                            <programlisting>
++hostname@REALM
++netbiosname$@REALM
++host/hostname@REALM
++*$@REALM
++host/*@REALM
++host/*
++                            </programlisting>
++                            If none of them are found, the first principal in keytab is
++                            returned.
+                         </para>
+                         <para>
+                             Default: host/hostname@REALM
+-- 
+2.17.1
+

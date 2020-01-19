@@ -1,0 +1,44 @@
+From a195869e527df27451bee8b68108abd005976b2d Mon Sep 17 00:00:00 2001
+From: Lukas Slebodnik <lslebodn@redhat.com>
+Date: Tue, 31 Jul 2018 21:03:38 +0000
+Subject: [PATCH] SSS_CERT: Close file descriptors after executing p11_child
+
+We can call cert_to_ssh_key_step from cert_to_ssh_key_done and thus
+p11_child can be executed more time. We created pipes for each call
+but destructor for state->io can close just last one.
+
+It's better to manually close pipes with macro PIPE_FD_CLOSE.
+that macro set file descriptor to -1 and destructor will not try
+to close them 2nd time. Destructor will cover just edge cases.
+
+Merges: https://pagure.io/SSSD/sssd/pull-request/3793
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3794
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit a76f96ac143128c11bdb975293d667aca861cd91)
+
+DOWNSTREAM:
+Resolves: rhbz#1610667 - sssd_ssh leaks file descriptors when more than one certificate is converted into an SSH key
+---
+ src/util/cert/cert_common_p11_child.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/util/cert/cert_common_p11_child.c b/src/util/cert/cert_common_p11_child.c
+index 17e97eeeeb1956ca6d2bbf048445117029b10dde..aacdb5c475274234fd18d5eca23ee5f9c9288c3e 100644
+--- a/src/util/cert/cert_common_p11_child.c
++++ b/src/util/cert/cert_common_p11_child.c
+@@ -255,6 +255,9 @@ static void cert_to_ssh_key_done(int child_status,
+     int ret;
+     bool valid = false;
+ 
++    PIPE_FD_CLOSE(state->io->read_from_child_fd);
++    PIPE_FD_CLOSE(state->io->write_to_child_fd);
++
+     if (WIFEXITED(child_status)) {
+         if (WEXITSTATUS(child_status) != 0) {
+             DEBUG(SSSDBG_OP_FAILURE,
+-- 
+2.17.1
+

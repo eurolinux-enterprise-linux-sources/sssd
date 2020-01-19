@@ -1,0 +1,48 @@
+From 62cfc6d28b770f56fcb103eeed32e961d3531f3d Mon Sep 17 00:00:00 2001
+From: Lukas Slebodnik <lslebodn@redhat.com>
+Date: Tue, 31 Jul 2018 20:44:06 +0000
+Subject: [PATCH] CRYPTO: Save prefix in s3crypt_sha512
+
+Since commit 2951a9a84bd85f384213a3e071ffc167907df2d7 where we switched from
+stpncpy to memcpy the salt prefix "$6$" is not stored at all.
+This broke offline authentication if someone upgraded from old version
+that stored the prefix to one that doesn't store it.
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3791
+
+Merges: https://pagure.io/SSSD/sssd/pull-request/3792
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+---
+ src/util/crypto/libcrypto/crypto_sha512crypt.c | 1 +
+ src/util/crypto/nss/nss_sha512crypt.c          | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/src/util/crypto/libcrypto/crypto_sha512crypt.c b/src/util/crypto/libcrypto/crypto_sha512crypt.c
+index 5861f34b9325f7552491a07e8b85fe35ca5ae607..2275ccd96212b28984e47c128ba2acb233b865d0 100644
+--- a/src/util/crypto/libcrypto/crypto_sha512crypt.c
++++ b/src/util/crypto/libcrypto/crypto_sha512crypt.c
+@@ -278,6 +278,7 @@ static int sha512_crypt_r(const char *key,
+     }
+ 
+     cp = memcpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
++    cp += SALT_PREF_SIZE;
+     buflen -= SALT_PREF_SIZE;
+ 
+     if (rounds_custom) {
+diff --git a/src/util/crypto/nss/nss_sha512crypt.c b/src/util/crypto/nss/nss_sha512crypt.c
+index 709cf51961bb7069ddebf3d636aa29b020756f0a..4d0594d9f21f0fe4228037901c6792625bd4f7c6 100644
+--- a/src/util/crypto/nss/nss_sha512crypt.c
++++ b/src/util/crypto/nss/nss_sha512crypt.c
+@@ -268,6 +268,7 @@ static int sha512_crypt_r(const char *key,
+     }
+ 
+     cp = memcpy(buffer, sha512_salt_prefix, SALT_PREF_SIZE);
++    cp += SALT_PREF_SIZE;
+     buflen -= SALT_PREF_SIZE;
+ 
+     if (rounds_custom) {
+-- 
+2.14.4
+

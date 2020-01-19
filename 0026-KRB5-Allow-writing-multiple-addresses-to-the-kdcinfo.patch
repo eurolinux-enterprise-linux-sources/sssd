@@ -1,0 +1,246 @@
+From 73f452058c8ac83117cb86c12d4d266c8caccc57 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Tue, 26 Jun 2018 10:35:15 +0200
+Subject: [PATCH] KRB5: Allow writing multiple addresses to the kdcinfo plugin
+
+Turns the previous write_krb5info_file() function into a static function
+that writes whatever input it recevies. Adds a wrapper around it that
+accepts a list of strings, turns that into a newline-separated string
+which is then passed to the original function.
+
+Related:
+https://pagure.io/SSSD/sssd/issue/3291
+
+Reviewed-by: Sumit Bose <sbose@redhat.com>
+(cherry picked from commit 8971399c872c21769d5c62cf753c5f9df4caf8cb)
+---
+ src/providers/ad/ad_common.c     | 12 ++---
+ src/providers/ipa/ipa_common.c   |  8 ++--
+ src/providers/krb5/krb5_common.c | 75 +++++++++++++++++++++++++-------
+ src/providers/krb5/krb5_common.h |  2 +-
+ 4 files changed, 70 insertions(+), 27 deletions(-)
+
+diff --git a/src/providers/ad/ad_common.c b/src/providers/ad/ad_common.c
+index b103410e5915a380d0404e18da869517e4d4e355..eaf0814f1aaf51a5085e992efa633240f32c498e 100644
+--- a/src/providers/ad/ad_common.c
++++ b/src/providers/ad/ad_common.c
+@@ -848,7 +848,7 @@ ad_resolve_callback(void *private_data, struct fo_server *server)
+     struct resolv_hostent *srvaddr;
+     struct sockaddr_storage *sockaddr;
+     char *address;
+-    const char *safe_address;
++    char *safe_addr_list[2] = { NULL, NULL };
+     char *new_uri;
+     int new_port;
+     const char *srv_name;
+@@ -957,17 +957,17 @@ ad_resolve_callback(void *private_data, struct fo_server *server)
+     if ((sdata == NULL || sdata->gc == false) &&
+         service->krb5_service->write_kdcinfo) {
+         /* Write krb5 info files */
+-        safe_address = sss_escape_ip_address(tmp_ctx,
+-                                            srvaddr->family,
+-                                            address);
+-        if (safe_address == NULL) {
++        safe_addr_list[0] = sss_escape_ip_address(tmp_ctx,
++                                                  srvaddr->family,
++                                                  address);
++        if (safe_addr_list[0] == NULL) {
+             DEBUG(SSSDBG_CRIT_FAILURE, "sss_escape_ip_address failed.\n");
+             ret = ENOMEM;
+             goto done;
+         }
+ 
+         ret = write_krb5info_file(service->krb5_service,
+-                                  safe_address,
++                                  safe_addr_list,
+                                   SSS_KRB5KDC_FO_SRV);
+         if (ret != EOK) {
+             DEBUG(SSSDBG_MINOR_FAILURE,
+diff --git a/src/providers/ipa/ipa_common.c b/src/providers/ipa/ipa_common.c
+index 5808513bfd570c43bc1712114aabba5749ba0fec..0614019764287e5114aa8b8b5c670b717732068b 100644
+--- a/src/providers/ipa/ipa_common.c
++++ b/src/providers/ipa/ipa_common.c
+@@ -766,7 +766,7 @@ static void ipa_resolve_callback(void *private_data, struct fo_server *server)
+     struct resolv_hostent *srvaddr;
+     struct sockaddr_storage *sockaddr;
+     char *address;
+-    const char *safe_address;
++    char *safe_addr_list[2] = { NULL, NULL };
+     char *new_uri;
+     const char *srv_name;
+     int ret;
+@@ -829,17 +829,17 @@ static void ipa_resolve_callback(void *private_data, struct fo_server *server)
+     service->sdap->sockaddr = talloc_steal(service, sockaddr);
+ 
+     if (service->krb5_service->write_kdcinfo) {
+-        safe_address = sss_escape_ip_address(tmp_ctx,
++        safe_addr_list[0] = sss_escape_ip_address(tmp_ctx,
+                                              srvaddr->family,
+                                              address);
+-        if (safe_address == NULL) {
++        if (safe_addr_list[0] == NULL) {
+             DEBUG(SSSDBG_CRIT_FAILURE, "sss_escape_ip_address failed.\n");
+             talloc_free(tmp_ctx);
+             return;
+         }
+ 
+         ret = write_krb5info_file(service->krb5_service,
+-                                  safe_address,
++                                  safe_addr_list,
+                                   SSS_KRB5KDC_FO_SRV);
+         if (ret != EOK) {
+             DEBUG(SSSDBG_OP_FAILURE,
+diff --git a/src/providers/krb5/krb5_common.c b/src/providers/krb5/krb5_common.c
+index 2a50dfec55c29b8d7f8b8751c904977c22aa906a..2b003e1642b449e8db20ba4259ba13273e21212f 100644
+--- a/src/providers/krb5/krb5_common.c
++++ b/src/providers/krb5/krb5_common.c
+@@ -466,10 +466,9 @@ done:
+     return ret;
+ }
+ 
+-
+-errno_t write_krb5info_file(struct krb5_service *krb5_service,
+-                            const char *server,
+-                            const char *service)
++static errno_t write_krb5info_file_contents(struct krb5_service *krb5_service,
++                                            const char *contents,
++                                            const char *service)
+ {
+     int ret;
+     int fd = -1;
+@@ -482,7 +481,7 @@ errno_t write_krb5info_file(struct krb5_service *krb5_service,
+ 
+     if (krb5_service == NULL || krb5_service->realm == NULL
+                              || *krb5_service->realm == '\0'
+-                             || server == NULL || *server == '\0'
++                             || contents == NULL || *contents == '\0'
+                              || service == NULL || *service == '\0') {
+         DEBUG(SSSDBG_CRIT_FAILURE,
+               "Missing or empty realm, server or service.\n");
+@@ -505,7 +504,7 @@ errno_t write_krb5info_file(struct krb5_service *krb5_service,
+         return EINVAL;
+     }
+ 
+-    server_len = strlen(server);
++    server_len = strlen(contents);
+ 
+     tmp_ctx = talloc_new(NULL);
+     if (tmp_ctx == NULL) {
+@@ -535,7 +534,7 @@ errno_t write_krb5info_file(struct krb5_service *krb5_service,
+     }
+ 
+     errno = 0;
+-    written = sss_atomic_write_s(fd, discard_const(server), server_len);
++    written = sss_atomic_write_s(fd, discard_const(contents), server_len);
+     if (written == -1) {
+         ret = errno;
+         DEBUG(SSSDBG_CRIT_FAILURE,
+@@ -592,12 +591,56 @@ done:
+     return ret;
+ }
+ 
++errno_t write_krb5info_file(struct krb5_service *krb5_service,
++                            char **server_list,
++                            const char *service)
++{
++    int i;
++    errno_t ret;
++    TALLOC_CTX *tmp_ctx = NULL;
++    char *contents = NULL;
++
++    if (krb5_service == NULL || server_list == NULL || service == NULL) {
++        return EINVAL;
++    }
++
++    if (server_list[0] == NULL) {
++        return EOK;
++    }
++
++    tmp_ctx = talloc_new(NULL);
++    if (tmp_ctx == NULL) {
++        return ENOMEM;
++    }
++
++    contents = talloc_strdup(tmp_ctx, "");
++    if (contents == NULL) {
++        ret = ENOMEM;
++        goto done;
++    }
++
++    i = 0;
++    do {
++        contents = talloc_asprintf_append(contents, "%s\n", server_list[i]);
++        if (contents == NULL) {
++            ret = ENOMEM;
++            goto done;
++        }
++        i++;
++    } while (server_list[i] != NULL);
++
++    ret = write_krb5info_file_contents(krb5_service, contents, service);
++done:
++    talloc_free(tmp_ctx);
++    return ret;
++}
++
+ static void krb5_resolve_callback(void *private_data, struct fo_server *server)
+ {
+     struct krb5_service *krb5_service;
+     struct resolv_hostent *srvaddr;
+     char *address;
+-    char *safe_address;
++    char *safe_addr_list[2] = { NULL, NULL };
+     int ret;
+     TALLOC_CTX *tmp_ctx = NULL;
+ 
+@@ -630,26 +673,26 @@ static void krb5_resolve_callback(void *private_data, struct fo_server *server)
+         return;
+     }
+ 
+-    safe_address = sss_escape_ip_address(tmp_ctx,
+-                                         srvaddr->family,
+-                                         address);
+-    if (safe_address == NULL) {
++    safe_addr_list[0] = sss_escape_ip_address(tmp_ctx,
++                                              srvaddr->family,
++                                              address);
++    if (safe_addr_list[0] == NULL) {
+         DEBUG(SSSDBG_CRIT_FAILURE, "sss_escape_ip_address failed.\n");
+         talloc_free(tmp_ctx);
+         return;
+     }
+ 
+     if (krb5_service->write_kdcinfo) {
+-        safe_address = talloc_asprintf_append(safe_address, ":%d",
+-                                            fo_get_server_port(server));
+-        if (safe_address == NULL) {
++        safe_addr_list[0] = talloc_asprintf_append(safe_addr_list[0], ":%d",
++                                                   fo_get_server_port(server));
++        if (safe_addr_list[0] == NULL) {
+             DEBUG(SSSDBG_CRIT_FAILURE, "talloc_asprintf_append failed.\n");
+             talloc_free(tmp_ctx);
+             return;
+         }
+ 
+         ret = write_krb5info_file(krb5_service,
+-                                  safe_address,
++                                  safe_addr_list,
+                                   krb5_service->name);
+         if (ret != EOK) {
+             DEBUG(SSSDBG_OP_FAILURE,
+diff --git a/src/providers/krb5/krb5_common.h b/src/providers/krb5/krb5_common.h
+index 1c12d5652ccef7e1738177eedad1c9de543916b7..bf36a551a92877ec838d8d3a041903144f22bc8f 100644
+--- a/src/providers/krb5/krb5_common.h
++++ b/src/providers/krb5/krb5_common.h
+@@ -161,7 +161,7 @@ errno_t sss_krb5_get_options(TALLOC_CTX *memctx, struct confdb_ctx *cdb,
+                              const char *conf_path, struct dp_option **_opts);
+ 
+ errno_t write_krb5info_file(struct krb5_service *krb5_service,
+-                            const char *server,
++                            char **server_list,
+                             const char *service);
+ 
+ struct krb5_service *krb5_service_new(TALLOC_CTX *mem_ctx,
+-- 
+2.17.1
+

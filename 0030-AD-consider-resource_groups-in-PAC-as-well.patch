@@ -1,0 +1,334 @@
+From a7b308a01914458234bc05539e773e4c0762ad4b Mon Sep 17 00:00:00 2001
+From: Sumit Bose <sbose@redhat.com>
+Date: Thu, 28 Jun 2018 12:41:41 +0200
+Subject: [PATCH] AD: consider resource_groups in PAC as well
+
+With recent versions of Active Directory the SIDs of Domain Local groups
+might be only available in the resource_groups section of the PAC, this
+feature is also called SID compression. To get a complete list of groups
+the user is a member of the SIDs from this section must be extracted as
+well.
+
+Resolves https://pagure.io/SSSD/sssd/issue/3767
+
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit 13c8450788a429fa49ba532b40ebfd7f3a4132e4)
+
+DOWNSTREAM:
+Resolves: rhbz#1592964 - Groups go missing with PAC enabled in sssd
+---
+ src/external/samba.m4             |   8 ++
+ src/providers/ad/ad_pac.c         | 130 ++++++++++++++++++++++++------
+ src/tests/cmocka/test_ad_common.c |  95 ++++++++++++++++++++++
+ 3 files changed, 210 insertions(+), 23 deletions(-)
+
+diff --git a/src/external/samba.m4 b/src/external/samba.m4
+index 794cac2461d7fbd5e690ea105cd346cbe6fcce9a..7a8c1eb7b9069f18def4e915b0fb9ab054a68e01 100644
+--- a/src/external/samba.m4
++++ b/src/external/samba.m4
+@@ -122,3 +122,11 @@ int main(void)
+     AC_DEFINE_UNQUOTED(SMB_IDMAP_INTERFACE_VERSION, $idmap_version,
+                        [Detected version of Samba's idmap plugin interface])
+ fi
++
++SAVE_CFLAGS=$CFLAGS
++CFLAGS="$CFLAGS $SMBCLIENT_CFLAGS $NDR_NBT_CFLAGS $NDR_KRB5PAC_CFLAGS -I/usr/include/samba-4.0"
++AC_CHECK_MEMBERS([struct PAC_LOGON_INFO.resource_groups], , ,
++                 [[ #include <ndr.h>
++                    #include <gen_ndr/krb5pac.h>
++                    #include <gen_ndr/krb5pac.h>]])
++CFLAGS=$SAVE_CFLAGS
+diff --git a/src/providers/ad/ad_pac.c b/src/providers/ad/ad_pac.c
+index 1a344725fbf57d4d95c46163f2e31d44e69b3e65..80424b44e334958402cb8cfebedc1898f1e2f9c8 100644
+--- a/src/providers/ad/ad_pac.c
++++ b/src/providers/ad/ad_pac.c
+@@ -146,6 +146,87 @@ errno_t check_if_pac_is_available(TALLOC_CTX *mem_ctx,
+     return EOK;
+ }
+ 
++static errno_t
++add_sids_from_rid_array_to_hash_table(struct dom_sid *dom_sid,
++                                      struct samr_RidWithAttributeArray *groups,
++                                      struct sss_idmap_ctx *idmap_ctx,
++                                      hash_table_t *sid_table)
++{
++    enum idmap_error_code err;
++    char *dom_sid_str = NULL;
++    size_t dom_sid_str_len;
++    char *sid_str = NULL;
++    char *rid_start;
++    hash_key_t key;
++    hash_value_t value;
++    int ret;
++    size_t c;
++    TALLOC_CTX *tmp_ctx = NULL;
++
++    tmp_ctx = talloc_new(NULL);
++    if (tmp_ctx == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "talloc_new failed.\n");
++        return ENOMEM;
++    }
++
++    key.type = HASH_KEY_STRING;
++    value.type = HASH_VALUE_ULONG;
++
++    err = sss_idmap_smb_sid_to_sid(idmap_ctx, dom_sid, &dom_sid_str);
++    if (err != IDMAP_SUCCESS) {
++        DEBUG(SSSDBG_OP_FAILURE, "sss_idmap_smb_sid_to_sid failed.\n");
++        ret = EFAULT;
++        goto done;
++    }
++
++    dom_sid_str_len = strlen(dom_sid_str);
++    sid_str = talloc_zero_size(tmp_ctx, dom_sid_str_len + 12);
++    if (sid_str == NULL) {
++        DEBUG(SSSDBG_OP_FAILURE, "talloc_zero_size failed.\n");
++        ret = ENOMEM;
++        goto done;
++    }
++    rid_start = sid_str + dom_sid_str_len;
++
++    memcpy(sid_str, dom_sid_str, dom_sid_str_len);
++
++    for (c = 0; c < groups->count; c++) {
++        memset(rid_start, '\0', 12);
++        ret = snprintf(rid_start, 12, "-%lu",
++                       (unsigned long) groups->rids[c].rid);
++        if (ret < 0 || ret > 12) {
++            DEBUG(SSSDBG_OP_FAILURE, "snprintf failed.\n");
++            ret = EIO;
++            goto done;
++        }
++
++        key.str = sid_str;
++        value.ul = 0;
++
++        ret = hash_enter(sid_table, &key, &value);
++        if (ret != HASH_SUCCESS) {
++            DEBUG(SSSDBG_OP_FAILURE, "hash_enter failed [%d][%s].\n",
++                                      ret, hash_error_string(ret));
++            ret = EIO;
++            goto done;
++        }
++
++    }
++
++    ret = EOK;
++
++done:
++    sss_idmap_free_sid(idmap_ctx, dom_sid_str);
++    talloc_free(tmp_ctx);
++
++    return ret;
++}
++
++struct resource_groups {
++    struct dom_sid2 *domain_sid;
++    struct samr_RidWithAttributeArray groups;
++};
++
+ errno_t ad_get_sids_from_pac(TALLOC_CTX *mem_ctx,
+                              struct sss_idmap_ctx *idmap_ctx,
+                              struct PAC_LOGON_INFO *logon_info,
+@@ -157,6 +238,7 @@ errno_t ad_get_sids_from_pac(TALLOC_CTX *mem_ctx,
+     int ret;
+     size_t s;
+     struct netr_SamInfo3 *info3;
++    struct resource_groups resource_groups = { 0 };
+     char *sid_str = NULL;
+     char *msid_str = NULL;
+     char *user_dom_sid_str = NULL;
+@@ -188,9 +270,15 @@ errno_t ad_get_sids_from_pac(TALLOC_CTX *mem_ctx,
+     }
+ 
+     info3 = &logon_info->info3;
++#ifdef HAVE_STRUCT_PAC_LOGON_INFO_RESOURCE_GROUPS
++    resource_groups.domain_sid = logon_info->resource_groups.domain_sid;
++    resource_groups.groups.count = logon_info->resource_groups.groups.count;
++    resource_groups.groups.rids = logon_info->resource_groups.groups.rids;
++#endif
+ 
+     ret = sss_hash_create(tmp_ctx,
+-                          info3->sidcount + info3->base.groups.count + 2,
++                          info3->sidcount + info3->base.groups.count + 2
++                                          + resource_groups.groups.count,
+                           &sid_table);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_OP_FAILURE, "sss_hash_create failed.\n");
+@@ -265,28 +353,13 @@ errno_t ad_get_sids_from_pac(TALLOC_CTX *mem_ctx,
+         goto done;
+     }
+ 
+-
+-    for (s = 0; s < info3->base.groups.count; s++) {
+-        memset(rid_start, '\0', 12);
+-        ret = snprintf(rid_start, 12, "-%lu",
+-                                (unsigned long) info3->base.groups.rids[s].rid);
+-        if (ret < 0 || ret > 12) {
+-            DEBUG(SSSDBG_OP_FAILURE, "snprintf failed.\n");
+-            ret = EIO;
+-            goto done;
+-        }
+-
+-        key.str = sid_str;
+-        value.ul = 0;
+-
+-        ret = hash_enter(sid_table, &key, &value);
+-        if (ret != HASH_SUCCESS) {
+-            DEBUG(SSSDBG_OP_FAILURE, "hash_enter failed [%d][%s].\n",
+-                                      ret, hash_error_string(ret));
+-            ret = EIO;
+-            goto done;
+-        }
+-
++    ret = add_sids_from_rid_array_to_hash_table(info3->base.domain_sid,
++                                                &info3->base.groups,
++                                                idmap_ctx, sid_table);
++    if (ret != EOK) {
++        DEBUG(SSSDBG_OP_FAILURE,
++              "add_sids_from_rid_array_to_hash_table failed.\n");
++        goto done;
+     }
+ 
+     for(s = 0; s < info3->sidcount; s++) {
+@@ -311,6 +384,17 @@ errno_t ad_get_sids_from_pac(TALLOC_CTX *mem_ctx,
+         }
+     }
+ 
++    if (resource_groups.domain_sid != NULL) {
++        ret = add_sids_from_rid_array_to_hash_table(resource_groups.domain_sid,
++                                                    &resource_groups.groups,
++                                                    idmap_ctx, sid_table);
++        if (ret != EOK) {
++            DEBUG(SSSDBG_OP_FAILURE,
++                  "add_sids_from_rid_array_to_hash_table failed.\n");
++            goto done;
++        }
++    }
++
+     num_sids = hash_count(sid_table);
+     sid_list = talloc_array(tmp_ctx, char *, num_sids);
+     if (sid_list == NULL) {
+diff --git a/src/tests/cmocka/test_ad_common.c b/src/tests/cmocka/test_ad_common.c
+index 39ebbc63324ca40d071f30582d2f15d732f6c466..ac3b0d0ab3c7b0a0ee4d21d96e1b4783ff1b4139 100644
+--- a/src/tests/cmocka/test_ad_common.c
++++ b/src/tests/cmocka/test_ad_common.c
+@@ -207,6 +207,29 @@ static void test_check_if_pac_is_available(void **state)
+     "BEAEUAVgBFAEwAdv///4yBQZ5ZQnp3qwj2lKGcd0UAAAAAdv//" \
+     "/39fn4UneD5l6YxP8w/U0coAAAAA"
+ 
++#define TEST_PAC_RESOURCE_GROUPS_BASE64 \
++    "BQAAAAAAAAABAAAA8AEAAFgAAAAAAAAACgAAABQAAABIAgAA" \
++    "AAAAAAwAAABYAAAAYAIAAAAAAAAGAAAAEAAAALgCAAAAAAAA" \
++    "BwAAABQAAADIAgAAAAAAAAEQCADMzMzM4AEAAAAAAAAAAAIA" \
++    "Rr0gPUQO1AH/////////f/////////9/TRPNRwtu0wFN0zZy" \
++    "1G7TAf////////9/CgAKAAQAAgAKAAoACAACAAAAAAAMAAIA" \
++    "AAAAABAAAgAAAAAAFAACAAAAAAAYAAIACwAAAFEEAAABAgAA" \
++    "AwAAABwAAgAgAgAAAAAAAAAAAAAAAAAAAAAAAAQABgAgAAIA" \
++    "BgAIACQAAgAoAAIAAAAAAAAAAAAQAgAAAAAAAAAAAAAAAAAA" \
++    "AAAAAAAAAAAAAAAAAAAAAAEAAAAsAAIANAACAAEAAAA4AAIA" \
++    "BQAAAAAAAAAFAAAAdAB1AHMAZQByAAAABQAAAAAAAAAFAAAA" \
++    "dAB1AHMAZQByAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" \
++    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAECAAAHAAAA" \
++    "YgQAAAcAAABjBAAABwAAAAMAAAAAAAAAAgAAAEQAQwAEAAAA" \
++    "AAAAAAMAAABXAEkATgAAAAQAAAABBAAAAAAABRUAAAAkYm0r" \
++    "SyFumd73jX0BAAAAMAACAAcAAAABAAAAAQEAAAAAABIBAAAA" \
++    "BAAAAAEEAAAAAAAFFQAAACRibStLIW6Z3veNfQEAAABoBAAA" \
++    "BwAAIAAAAACAEuVfRA7UAQoAdAB1AHMAZQByAAAAAAAoABAA" \
++    "HAA4AAAAAAAAAAAAdAB1AHMAZQByAEAAdwBpAG4ALgB0AHIA" \
++    "dQBzAHQALgB0AGUAcwB0AFcASQBOAC4AVABSAFUAUwBUAC4A" \
++    "VABFAFMAVAAAAAAAEAAAAOGTj7I9Qn7XebOqdHb///+fHhrZ" \
++    "kBt0So4jOFBk84sDAAAAAA=="
++
+ static void test_ad_get_data_from_pac(void **state)
+ {
+     int ret;
+@@ -303,6 +326,73 @@ static void test_ad_get_sids_from_pac(void **state)
+     sss_idmap_free(idmap_ctx);
+ }
+ 
++#ifdef HAVE_STRUCT_PAC_LOGON_INFO_RESOURCE_GROUPS
++static void test_ad_get_sids_from_pac_with_resource_groups(void **state)
++{
++    int ret;
++    struct PAC_LOGON_INFO *logon_info;
++    uint8_t *test_pac_blob;
++    size_t test_pac_blob_size;
++    char *user_sid;
++    char *primary_group_sid;
++    size_t num_sids;
++    char **sid_list;
++    struct sss_idmap_ctx *idmap_ctx;
++    enum idmap_error_code err;
++    size_t c;
++    size_t s;
++
++    const char *sid_check_list[] = { "S-1-5-21-728588836-2574131531-2106456030-513",
++                                     "S-1-5-21-728588836-2574131531-2106456030-1122",
++                                     "S-1-5-21-728588836-2574131531-2106456030-1123",
++                                     "S-1-5-21-728588836-2574131531-2106456030-1128",
++                                     "S-1-18-1",
++                                     NULL };
++
++    struct ad_common_test_ctx *test_ctx = talloc_get_type(*state,
++                                                  struct ad_common_test_ctx);
++
++    err = sss_idmap_init(sss_idmap_talloc, test_ctx, sss_idmap_talloc_free,
++                         &idmap_ctx);
++    assert_int_equal(err, IDMAP_SUCCESS);
++
++    test_pac_blob = sss_base64_decode(test_ctx, TEST_PAC_RESOURCE_GROUPS_BASE64,
++                                      &test_pac_blob_size);
++    assert_non_null(test_pac_blob_size);
++
++    ret = ad_get_data_from_pac(test_ctx, test_pac_blob, test_pac_blob_size,
++                               &logon_info);
++    assert_int_equal(ret, EOK);
++
++    ret = ad_get_sids_from_pac(test_ctx, idmap_ctx, logon_info, &user_sid,
++                               &primary_group_sid, &num_sids, &sid_list);
++    assert_int_equal(ret, EOK);
++    assert_string_equal(user_sid,
++                        "S-1-5-21-728588836-2574131531-2106456030-1105");
++    assert_string_equal(primary_group_sid,
++                        "S-1-5-21-728588836-2574131531-2106456030-513");
++    assert_int_equal(num_sids, 5);
++
++    for (c = 0; sid_check_list[c] != NULL; c++) {
++        for (s = 0; s < num_sids; s++) {
++            if (strcmp(sid_check_list[c], sid_list[s]) == 0) {
++                break;
++            }
++        }
++        if (s == num_sids) {
++            fail_msg("SID [%s] not found in SID list.", sid_check_list[c]);
++        }
++    }
++
++    talloc_free(test_pac_blob);
++    talloc_free(logon_info);
++    talloc_free(user_sid);
++    talloc_free(primary_group_sid);
++    talloc_free(sid_list);
++    sss_idmap_free(idmap_ctx);
++}
++#endif
++
+ static void test_ad_get_pac_data_from_user_entry(void **state)
+ {
+     int ret;
+@@ -912,6 +1002,11 @@ int main(int argc, const char *argv[])
+         cmocka_unit_test_setup_teardown(test_ad_get_sids_from_pac,
+                                         test_ad_common_setup,
+                                         test_ad_common_teardown),
++#ifdef HAVE_STRUCT_PAC_LOGON_INFO_RESOURCE_GROUPS
++        cmocka_unit_test_setup_teardown(test_ad_get_sids_from_pac_with_resource_groups,
++                                        test_ad_common_setup,
++                                        test_ad_common_teardown),
++#endif
+         cmocka_unit_test_setup_teardown(test_ad_get_pac_data_from_user_entry,
+                                         test_ad_common_setup,
+                                         test_ad_common_teardown),
+-- 
+2.17.1
+

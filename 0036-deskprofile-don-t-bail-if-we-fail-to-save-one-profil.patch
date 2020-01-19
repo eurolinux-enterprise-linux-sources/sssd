@@ -1,0 +1,45 @@
+From ef96cf36996d9e5802e529e5e812515ec3bda65c Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Fabiano=20Fid=C3=AAncio?= <fidencio@redhat.com>
+Date: Thu, 12 Jul 2018 23:55:03 +0200
+Subject: [PATCH] deskprofile: don't bail if we fail to save one profile
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Due to different reasons (a bug on fleet-commander, for instance?) we
+may face the situation where one profile ends up stored in freeipa on a
+half-broken state (with no data, for instance).
+
+In case it happens, we should try our best to save the not broken
+profiles and just skip the broken ones instead of bailing the whole
+operation.
+
+Resolves:
+https://pagure.io/SSSD/sssd/issue/3773
+
+Signed-off-by: Fabiano Fidêncio <fidencio@redhat.com>
+Reviewed-by: Jakub Hrozek <jhrozek@redhat.com>
+(cherry picked from commit efd6702e5f70bb3df0f840dd3ce9f8f9264661ba)
+
+DOWNSTREAM:
+Resolves: rhbz#1600822 - SSSD bails out saving desktop profiles in case an invalid profile is found
+---
+ src/providers/ipa/ipa_session.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/providers/ipa/ipa_session.c b/src/providers/ipa/ipa_session.c
+index 25ad5ce519e6923d7a4d8aa81e72b109ae36dbe1..33c64e5b7af9bd3353770f422be42a0b6ac23e09 100644
+--- a/src/providers/ipa/ipa_session.c
++++ b/src/providers/ipa/ipa_session.c
+@@ -768,7 +768,7 @@ ipa_pam_session_handler_save_deskprofile_rules(
+             DEBUG(SSSDBG_OP_FAILURE,
+                   "Failed to save a Desktop Profile Rule to disk [%d]: %s\n",
+                   ret, sss_strerror(ret));
+-            goto done;
++            continue;
+         }
+     }
+ 
+-- 
+2.17.1
+

@@ -1,0 +1,265 @@
+From e73e35f2a1ef037d89f73b4ce5609e2567dc8714 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Mon, 25 Jun 2018 12:46:51 +0200
+Subject: [PATCH] RESOLV: Add a resolv_hostport_list request
+
+Adds a request that resolves a list of (host,port) tuples and returns a
+list of structures that contain the resolv_hostent structure as other
+resolver requests do, but also a pointer to the original request tuple.
+
+This is done because the request skips any unresolvable inputs, so it
+might be handy to know which input an output maps to.
+
+It is expected that the request will be used in the future also for cases
+where we want to e.g. try the connectivity to a serve using a mechanism
+such as an LDAP ping.
+
+Related:
+https://pagure.io/SSSD/sssd/issue/3291
+
+Reviewed-by: Sumit Bose <sbose@redhat.com>
+(cherry picked from commit 6f80bccc6f8203381c387080bd0563ba10994487)
+---
+ src/resolv/async_resolv.c | 187 ++++++++++++++++++++++++++++++++++++++
+ src/resolv/async_resolv.h |  30 ++++++
+ 2 files changed, 217 insertions(+)
+
+diff --git a/src/resolv/async_resolv.c b/src/resolv/async_resolv.c
+index ba6fabf285533153ea440394ce1cc224aa42cbd3..bb27011548b73c0cc62f6638401847ab9e0b175c 100644
+--- a/src/resolv/async_resolv.c
++++ b/src/resolv/async_resolv.c
+@@ -2322,3 +2322,190 @@ resolv_sort_srv_reply(struct ares_srv_reply **reply)
+ 
+     return EOK;
+ }
++
++struct resolv_hostport_list_state {
++    struct tevent_context *ev;
++    struct resolv_ctx *ctx;
++    struct resolv_hostport *hostport_list;
++    size_t list_size;
++    size_t limit;
++    enum restrict_family family_order;
++    enum host_database *db;
++
++    size_t hpindex;
++
++    struct resolv_hostport_addr **rhp_addrs;
++    size_t addrindex;
++};
++
++static errno_t resolv_hostport_list_step(struct tevent_req *req);
++static void resolv_hostport_list_resolv_hostname_done(struct tevent_req *subreq);
++
++struct tevent_req *resolv_hostport_list_send(TALLOC_CTX *mem_ctx,
++                                             struct tevent_context *ev,
++                                             struct resolv_ctx *ctx,
++                                             struct resolv_hostport *hostport_list,
++                                             size_t list_size,
++                                             size_t limit,
++                                             enum restrict_family family_order,
++                                             enum host_database *db)
++{
++    struct resolv_hostport_list_state *state;
++    struct tevent_req *req;
++    errno_t ret;
++
++    req = tevent_req_create(mem_ctx, &state,
++                            struct resolv_hostport_list_state);
++    if (req == NULL) {
++        return NULL;
++    }
++    state->ev = ev;
++    state->ctx = ctx;
++    state->hostport_list = hostport_list;
++    state->family_order = family_order;
++    state->db = db;
++    state->list_size = list_size;
++    state->limit = limit;
++
++    state->rhp_addrs = talloc_array(state,
++                                    struct resolv_hostport_addr *,
++                                    state->list_size);
++    if (state->rhp_addrs == NULL) {
++        ret = ENOMEM;
++        goto immediately;
++    }
++
++    ret = resolv_hostport_list_step(req);
++    if (ret != EAGAIN) {
++        goto immediately;
++    }
++
++    return req;
++
++immediately:
++    if (ret != EOK) {
++        tevent_req_error(req, ret);
++    } else {
++        tevent_req_done(req);
++    }
++    tevent_req_post(req, ev);
++    return req;
++}
++
++static errno_t resolv_hostport_list_step(struct tevent_req *req)
++{
++    struct tevent_req *subreq = NULL;
++    struct resolv_hostport_list_state *state = tevent_req_data(req,
++                                        struct resolv_hostport_list_state);
++
++    if (state->hpindex >= state->list_size) {
++        DEBUG(SSSDBG_TRACE_INTERNAL, "Done\n");
++        return EOK;
++    }
++
++    subreq = resolv_gethostbyname_send(state,
++                                       state->ev,
++                                       state->ctx,
++                                       state->hostport_list[state->hpindex].host,
++                                       state->family_order,
++                                       state->db);
++    if (subreq == NULL) {
++        return ENOMEM;
++    }
++    tevent_req_set_callback(subreq,
++                            resolv_hostport_list_resolv_hostname_done, req);
++    return EAGAIN;
++}
++
++static struct resolv_hostport_addr*
++resolv_hostport_addr_new(TALLOC_CTX *mem_ctx,
++                         const char *host,
++                         int port,
++                         struct resolv_hostent *reply)
++{
++    struct resolv_hostport_addr *rhp_addr;
++
++    rhp_addr = talloc_zero(mem_ctx, struct resolv_hostport_addr);
++    if (rhp_addr == NULL) {
++        return NULL;
++    }
++
++    rhp_addr->origin.host = talloc_strdup(rhp_addr, host);
++    if (rhp_addr->origin.host == NULL) {
++        return NULL;
++    }
++
++    rhp_addr->origin.port = port;
++    rhp_addr->reply = talloc_steal(rhp_addr, reply);
++    return rhp_addr;
++}
++
++static void resolv_hostport_list_resolv_hostname_done(struct tevent_req *subreq)
++{
++    errno_t ret;
++    struct tevent_req *req =
++            tevent_req_callback_data(subreq, struct tevent_req);
++    struct resolv_hostport_list_state *state = tevent_req_data(req,
++                                        struct resolv_hostport_list_state);
++    struct resolv_hostent *rhostent;
++    int resolv_status;
++
++    ret = resolv_gethostbyname_recv(subreq, state, &resolv_status, NULL,
++                                    &rhostent);
++    talloc_zfree(subreq);
++
++    if (ret != EOK) {
++        /* Don't abort the request, just go to the next one */
++        DEBUG(SSSDBG_OP_FAILURE,
++              "Could not resolve address for this machine, error [%d]: %s, "
++              "resolver returned: [%d]: %s\n", ret, sss_strerror(ret),
++              resolv_status, resolv_strerror(resolv_status));
++    } else {
++        state->rhp_addrs[state->addrindex] = \
++            resolv_hostport_addr_new(state->rhp_addrs,
++                                     state->hostport_list[state->hpindex].host,
++                                     state->hostport_list[state->hpindex].port,
++                                     rhostent);
++        state->addrindex++;
++
++        if (state->limit > 0 && state->addrindex >= state->limit) {
++            DEBUG(SSSDBG_TRACE_INTERNAL,
++                "Reached the limit or addresses to resolve\n");
++            tevent_req_done(req);
++            return;
++        }
++    }
++
++    state->hpindex++;
++
++    ret = resolv_hostport_list_step(req);
++    if (ret == EOK) {
++        tevent_req_done(req);
++        return;
++    } else if (ret != EAGAIN) {
++        tevent_req_error(req, ret);
++        return;
++    }
++    /* Next iteration .. */
++}
++
++int resolv_hostport_list_recv(struct tevent_req *req,
++                              TALLOC_CTX *mem_ctx,
++                              size_t *_rhp_len,
++                              struct resolv_hostport_addr ***_rhp_addrs)
++{
++    struct resolv_hostport_list_state *state = tevent_req_data(req,
++                                        struct resolv_hostport_list_state);
++
++    TEVENT_REQ_RETURN_ON_ERROR(req);
++
++    if (_rhp_len) {
++        *_rhp_len = state->addrindex;
++    }
++
++    if (_rhp_addrs) {
++        *_rhp_addrs = talloc_steal(mem_ctx, state->rhp_addrs);
++    }
++
++    return EOK;
++}
+diff --git a/src/resolv/async_resolv.h b/src/resolv/async_resolv.h
+index b602a425c21b5f3bfd0098ce3208f6750d4ed1ad..90ed037075c7becb0f8bcd580b218092f2d8579e 100644
+--- a/src/resolv/async_resolv.h
++++ b/src/resolv/async_resolv.h
+@@ -112,6 +112,36 @@ int resolv_gethostbyname_recv(struct tevent_req *req, TALLOC_CTX *mem_ctx,
+                               int *status, int *timeouts,
+                               struct resolv_hostent **rhostent);
+ 
++struct resolv_hostport {
++    const char *host;
++    int port;
++};
++
++struct resolv_hostport_addr {
++    struct resolv_hostport origin;
++    struct resolv_hostent *reply;
++};
++
++/* Resolves a list of resolv_hostport tuples into a list of
++ * resolv_hostport_addr. Any unresolvable addresses are skipped.
++ *
++ * Optionally takes a limit argument and stops after the request
++ * had resolved addresses up to the limit.
++ */
++struct tevent_req *resolv_hostport_list_send(TALLOC_CTX *mem_ctx,
++                                             struct tevent_context *ev,
++                                             struct resolv_ctx *ctx,
++                                             struct resolv_hostport *hostport_list,
++                                             size_t list_size,
++                                             size_t limit,
++                                             enum restrict_family family_order,
++                                             enum host_database *db);
++
++int resolv_hostport_list_recv(struct tevent_req *req,
++                              TALLOC_CTX *mem_ctx,
++                              size_t *_rhp_len,
++                              struct resolv_hostport_addr ***_rhp_addrs);
++
+ char *
+ resolv_get_string_address_index(TALLOC_CTX *mem_ctx,
+                                 struct resolv_hostent *hostent,
+-- 
+2.17.1
+

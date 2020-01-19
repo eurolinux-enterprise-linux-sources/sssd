@@ -1,0 +1,246 @@
+From 95cb7de6221dad54b37f7dd05dbfc3b717168488 Mon Sep 17 00:00:00 2001
+From: Jakub Hrozek <jhrozek@redhat.com>
+Date: Mon, 25 Jun 2018 13:08:25 +0200
+Subject: [PATCH] KRB5/IPA/AD: Add a utility function to create a krb5_service
+ instance
+
+Each Kerberized provider used hand-crafted copy-paste code to set up its
+copy of the krb5_service structure. Instead of adding yet another copy in
+this patchset in the IPA subdomains code, create a utility function instead.
+
+Due to IPA provider first creating the krb5_service in the common setup
+function, but only later reading the auth options in the auth provider
+constructor, the code first uses the default true value for the use_kdcinfo
+flag and then overrides it with the configured value in the auth constructor
+-- it would be preferable to create the structure with the right value at
+creation time, but this would require bigger refactoring. Also, the code
+before this change was even less correct as the flag was initially set the
+"false" due to the structure being allocated with talloc_zero(). At least
+now it uses the default value.
+
+Related:
+https://pagure.io/SSSD/sssd/issue/3291
+
+Reviewed-by: Sumit Bose <sbose@redhat.com>
+(cherry picked from commit a9a9f39342ebd26425cb1b3baedfea2429d88b04)
+---
+ src/providers/ad/ad_common.c     | 26 ++--------------
+ src/providers/ipa/ipa_common.c   | 35 +++++++++-------------
+ src/providers/krb5/krb5_common.c | 51 ++++++++++++++++++++++----------
+ src/providers/krb5/krb5_common.h |  6 ++++
+ 4 files changed, 58 insertions(+), 60 deletions(-)
+
+diff --git a/src/providers/ad/ad_common.c b/src/providers/ad/ad_common.c
+index feeb5d09643a02b99be1a387b41842a034a323b8..b103410e5915a380d0404e18da869517e4d4e355 100644
+--- a/src/providers/ad/ad_common.c
++++ b/src/providers/ad/ad_common.c
+@@ -757,20 +757,14 @@ ad_failover_init(TALLOC_CTX *mem_ctx, struct be_ctx *bectx,
+         goto done;
+     }
+ 
+-    service->krb5_service = talloc_zero(service, struct krb5_service);
++    service->krb5_service = krb5_service_new(service, bectx,
++                                             ad_service, krb5_realm,
++                                             use_kdcinfo);
+     if (!service->krb5_service) {
+         ret = ENOMEM;
+         goto done;
+     }
+ 
+-    /* Set flag that controls whether we want to write the
+-     * kdcinfo files at all
+-     */
+-    service->krb5_service->write_kdcinfo = use_kdcinfo;
+-    DEBUG(SSSDBG_CONF_SETTINGS, "write_kdcinfo for realm %s set to %s\n",
+-                       krb5_realm,
+-                       service->krb5_service->write_kdcinfo ? "true" : "false");
+-
+     ret = be_fo_add_service(bectx, ad_service, ad_user_data_cmp);
+     if (ret != EOK) {
+         DEBUG(SSSDBG_CRIT_FAILURE, "Failed to create failover service!\n");
+@@ -783,12 +777,6 @@ ad_failover_init(TALLOC_CTX *mem_ctx, struct be_ctx *bectx,
+         goto done;
+     }
+ 
+-    service->krb5_service->name = talloc_strdup(service->krb5_service,
+-                                                ad_service);
+-    if (!service->krb5_service->name) {
+-        ret = ENOMEM;
+-        goto done;
+-    }
+     service->sdap->kinit_service_name = service->krb5_service->name;
+     service->gc->kinit_service_name = service->krb5_service->name;
+ 
+@@ -797,14 +785,6 @@ ad_failover_init(TALLOC_CTX *mem_ctx, struct be_ctx *bectx,
+         ret = EINVAL;
+         goto done;
+     }
+-    service->krb5_service->realm =
+-        talloc_strdup(service->krb5_service, krb5_realm);
+-    if (!service->krb5_service->realm) {
+-        ret = ENOMEM;
+-        goto done;
+-    }
+-
+-    service->krb5_service->be_ctx = bectx;
+ 
+     if (!primary_servers) {
+         DEBUG(SSSDBG_CONF_SETTINGS,
+diff --git a/src/providers/ipa/ipa_common.c b/src/providers/ipa/ipa_common.c
+index dcbb54a744358718e444972b9827ee64887e5e33..5808513bfd570c43bc1712114aabba5749ba0fec 100644
+--- a/src/providers/ipa/ipa_common.c
++++ b/src/providers/ipa/ipa_common.c
+@@ -965,6 +965,13 @@ int ipa_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+         return ENOMEM;
+     }
+ 
++    realm = dp_opt_get_string(options->basic, IPA_KRB5_REALM);
++    if (!realm) {
++        DEBUG(SSSDBG_CRIT_FAILURE, "No Kerberos realm set\n");
++        ret = EINVAL;
++        goto done;
++    }
++
+     service = talloc_zero(tmp_ctx, struct ipa_service);
+     if (!service) {
+         ret = ENOMEM;
+@@ -975,7 +982,13 @@ int ipa_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+         ret = ENOMEM;
+         goto done;
+     }
+-    service->krb5_service = talloc_zero(service, struct krb5_service);
++
++    service->krb5_service = krb5_service_new(service, ctx,
++                                             "IPA", realm,
++                                             true); /* The configured value
++                                                     * will be set later when
++                                                     * the auth provider is set up
++                                                     */
+     if (!service->krb5_service) {
+         ret = ENOMEM;
+         goto done;
+@@ -993,28 +1006,8 @@ int ipa_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+         goto done;
+     }
+ 
+-    service->krb5_service->name = talloc_strdup(service, "IPA");
+-    if (!service->krb5_service->name) {
+-        ret = ENOMEM;
+-        goto done;
+-    }
+     service->sdap->kinit_service_name = service->krb5_service->name;
+ 
+-    realm = dp_opt_get_string(options->basic, IPA_KRB5_REALM);
+-    if (!realm) {
+-        DEBUG(SSSDBG_CRIT_FAILURE, "No Kerberos realm set\n");
+-        ret = EINVAL;
+-        goto done;
+-    }
+-    service->krb5_service->realm =
+-        talloc_strdup(service->krb5_service, realm);
+-    if (!service->krb5_service->realm) {
+-        ret = ENOMEM;
+-        goto done;
+-    }
+-
+-    service->krb5_service->be_ctx = ctx;
+-
+     if (!primary_servers) {
+         DEBUG(SSSDBG_CONF_SETTINGS,
+               "No primary servers defined, using service discovery\n");
+diff --git a/src/providers/krb5/krb5_common.c b/src/providers/krb5/krb5_common.c
+index d064a09ac3726c4185c2fa1eeac76ef6c261d33b..2a50dfec55c29b8d7f8b8751c904977c22aa906a 100644
+--- a/src/providers/krb5/krb5_common.c
++++ b/src/providers/krb5/krb5_common.c
+@@ -807,6 +807,40 @@ static int krb5_user_data_cmp(void *ud1, void *ud2)
+     return strcasecmp((char*) ud1, (char*) ud2);
+ }
+ 
++struct krb5_service *krb5_service_new(TALLOC_CTX *mem_ctx,
++                                      struct be_ctx *be_ctx,
++                                      const char *service_name,
++                                      const char *realm,
++                                      bool use_kdcinfo)
++{
++    struct krb5_service *service;
++
++    service = talloc_zero(mem_ctx, struct krb5_service);
++    if (service == NULL) {
++        return NULL;
++    }
++
++    service->name = talloc_strdup(service, service_name);
++    if (service->name == NULL) {
++        talloc_free(service);
++        return NULL;
++    }
++
++    service->realm = talloc_strdup(service, realm);
++    if (service->realm == NULL) {
++        talloc_free(service);
++        return NULL;
++    }
++
++    DEBUG(SSSDBG_CONF_SETTINGS,
++          "write_kdcinfo for realm %s set to %s\n",
++          realm,
++          use_kdcinfo ? "true" : "false");
++    service->write_kdcinfo = use_kdcinfo;
++    service->be_ctx = be_ctx;
++    return service;
++}
++
+ int krb5_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+                       const char *service_name,
+                       const char *primary_servers,
+@@ -824,7 +858,7 @@ int krb5_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+         return ENOMEM;
+     }
+ 
+-    service = talloc_zero(tmp_ctx, struct krb5_service);
++    service = krb5_service_new(tmp_ctx, ctx, service_name, realm, use_kdcinfo);
+     if (!service) {
+         ret = ENOMEM;
+         goto done;
+@@ -836,21 +870,6 @@ int krb5_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+         goto done;
+     }
+ 
+-    service->name = talloc_strdup(service, service_name);
+-    if (!service->name) {
+-        ret = ENOMEM;
+-        goto done;
+-    }
+-
+-    service->realm = talloc_strdup(service, realm);
+-    if (!service->realm) {
+-        ret = ENOMEM;
+-        goto done;
+-    }
+-
+-    service->write_kdcinfo = use_kdcinfo;
+-    service->be_ctx = ctx;
+-
+     if (!primary_servers) {
+         DEBUG(SSSDBG_CONF_SETTINGS,
+               "No primary servers defined, using service discovery\n");
+diff --git a/src/providers/krb5/krb5_common.h b/src/providers/krb5/krb5_common.h
+index 3529d740b89fee91281f936fdafd1bdb99e95bd7..1c12d5652ccef7e1738177eedad1c9de543916b7 100644
+--- a/src/providers/krb5/krb5_common.h
++++ b/src/providers/krb5/krb5_common.h
+@@ -164,6 +164,12 @@ errno_t write_krb5info_file(struct krb5_service *krb5_service,
+                             const char *server,
+                             const char *service);
+ 
++struct krb5_service *krb5_service_new(TALLOC_CTX *mem_ctx,
++                                      struct be_ctx *be_ctx,
++                                      const char *service_name,
++                                      const char *realm,
++                                      bool use_kdcinfo);
++
+ int krb5_service_init(TALLOC_CTX *memctx, struct be_ctx *ctx,
+                       const char *service_name,
+                       const char *primary_servers,
+-- 
+2.17.1
+
